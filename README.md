@@ -1,7 +1,9 @@
+# Consulting Reports Q&A
+
 ## Solution
 
 ### Overview
-This solution implements a multi-tenant RAG (Retrieval Augmented Generation) system for processing and querying consulting reports with strict data isolation between tenants.
+This solution implements a basic RAG (Retrieval Augmented Generation) system for processing and querying consulting reports with strict data isolation between tenants. The current implementation focuses on core functionality and provides a foundation for further enhancements.
 
 ### Architecture
 - **Document Processing**: Unstructured + LlamaIndex for PDF parsing
@@ -42,14 +44,7 @@ This solution implements a multi-tenant RAG (Retrieval Augmented Generation) sys
    uv version
    ```
 
-4. Set up environment variables:
-   ```bash
-   WEAVIATE_URL=your-weaviate-url
-   WEAVIATE_API_KEY=your-api-key
-   OPENAI_API_KEY=your-openai-key
-   ```
-
-5. Create and activate virtual environment:
+4. Create and activate virtual environment:
    ```bash
    # Create virtual environment with Python 3.12
    uv venv --python 3.12
@@ -59,23 +54,100 @@ This solution implements a multi-tenant RAG (Retrieval Augmented Generation) sys
    .venv\Scripts\activate     # Windows
    ```
 
-6. Install dependencies:
+5. Install dependencies:
    ```bash
    # Sync dependencies from pyproject.toml
    uv sync
    ```
 
+6. Set up environment variables in `.env` file:
+   ```bash
+   # Weaviate configuration
+   WEAVIATE_URL=your-weaviate-url
+   WEAVIATE_API_KEY=your-weaviate-api-key
+   
+   # Tenant-specific passwords
+   WEAVIATE_BAIN_ADMIN_PASSWORD=your-bain-password
+   WEAVIATE_BCG_ADMIN_PASSWORD=your-bcg-password
+   WEAVIATE_MCK_ADMIN_PASSWORD=your-mck-password
+   
+   # Azure OpenAI configuration
+   AZURE_OPENAI_API_KEY=your-azure-openai-key
+   ENDPOINT_URL=your-azure-openai-endpoint
+   EMBEDDINGS_DEPLOYMENT_NAME=text-embedding-3-small
+   DEPLOYMENT_NAME=your-deployment-name
+   
+   # Other API Keys
+   LLAMA_API_KEY=your-llama-api-key
+   ```
+
+   Note: Create a `.env` file in the project root and add these environment variables. Never commit the actual API keys to version control.
+
 Note: uv is a fast, reliable Python package installer and resolver. For more information, visit [uv documentation](https://docs.astral.sh/uv/getting-started/installation/#uv).
 
-### Running the Project
-1. Process documents:
+### Quick Start
+After completing the project setup above:
+
+1. Start the backend services:
+```bash
+# From the project root
+# Start the document processing service
+python src/main.py
+
+# Start the FastAPI backend (in a new terminal)
+uvicorn src.api.main:app --reload --port 8000
+```
+
+2. Launch the Streamlit UI (in a new terminal):
+```bash
+# From the project root
+streamlit run src/ui/app.py
+```
+
+The application will be available at:
+- FastAPI backend: http://localhost:8000
+- Streamlit UI: http://localhost:8501
+
+### Test Data
+The repository includes a `test_data` directory with a few sample PDFs from major consulting firms (Bain, BCG, McKinsey) for demonstration purposes. These have been pre-vectorized for quick testing and evaluation.
+
+To test with full MBB AI Reports:
+1. Create directories in `test_data` for each tenant: `Bain/`, `BCG/`, `McK/`
+2. Add PDF reports to respective directories
+3. Run the processing script:
 ```bash
 python src/main.py
 ```
-2. Launch UI:
-```bash
-streamlit run src/ui/app.py
-```
+
+Note: Processing large volumes of documents may require optimization for production use.
+
+### Multi-tenant Support
+- The system supports multiple tenants (Bain, BCG, McKinsey) with strict data isolation
+- Each tenant's documents are stored and queried separately
+- ⚠️ Authentication layer needs to be implemented for secure tenant access
+- Current implementation focuses on demonstrating multi-tenant querying capabilities
+
+### Current Limitations and Future Enhancements
+1. **Performance Optimization**
+   - Batch processing for large document sets
+   - Caching for frequently accessed chunks
+   - Query optimization for faster response times
+
+2. **Security**
+   - Authentication system for tenant access
+   - Role-based access control
+   - API key management
+   - Audit logging
+
+3. **Known Issues**
+   - ⚠️ Section IDs are currently identical across different documents
+   - This affects document hierarchy and relationship tracking
+   - Fix planned: Implement unique section ID generation using document identifiers
+
+4. **Scalability**
+   - Connection pooling for concurrent requests
+   - Load balancing for distributed processing
+   - Query result caching
 
 ### Directory Structure
 ```
@@ -96,7 +168,10 @@ src/
 **Solution**: Implemented Weaviate's multi-tenancy with proper RBAC configuration.
 
 #### 2. Document Processing
-**Challenge**: Handling complex consulting reports with non-linear structure.
+**Challenge**: 
+- Handling complex consulting reports with non-linear structure
+- ⚠️ Section IDs currently duplicate across different documents, affecting document relationships
+
 **Solution**: 
 - Enhanced document processor to handle None elements
 - Added robust error handling for malformed PDFs
@@ -104,6 +179,11 @@ src/
 - Implemented image extraction with coordinate mapping
 - Prepared for CLIP-based visual semantic search
 - Built foundation for cross-modal retrieval (text-to-image, image-to-text)
+
+**Planned Improvements**:
+- Generate unique section IDs by incorporating document identifiers
+- Update relationship tracking to maintain document hierarchy
+- Ensure backwards compatibility with existing stored documents
 
 #### 3. Vector Storage Persistence
 **Challenge**: Initial implementation overwrote vectors when processing multiple tenants.
@@ -117,90 +197,34 @@ src/
 - Source validation
 - Metadata verification
 
-### Work in Progress
-1. **Complex Data Parsing**
-- [ ] Table extraction and vectorization
-- [ ] Image analysis and linking
-- [ ] Flow-chart structure preservation
-
-2. **Scalability**
-- [ ] Connection pooling
-- [ ] Query caching
-- [ ] Load balancing
-
-3. **Testing**
-- [ ] Unit tests for processors
-- [ ] Integration tests for multi-tenant queries
-- [ ] Performance benchmarks
-
-### Usage Examples
-
-#### Processing Documents
-```python
-# Process all tenant documents
-python src/main.py
-
-# Process specific tenant
-python src/main.py --tenant-id bain
-```
-
-### Querying Documents
-Use the Streamlit interface to:
-1. Select tenant
-2. Enter query
-3. View results with source citations
-4. Access analytics dashboard
-
-#### Performance Monitoring
+### Performance Monitoring
 The system includes:
 - Query latency tracking
 - Confidence score monitoring
 - Usage analytics by tenant
 - Response validation metrics
 
-#### Security Considerations
+### Security Considerations
 1. Tenant isolation through Weaviate multi-tenancy
 2. Role-based access control
 3. API key management
 4. Request validation
 5. Data access logging
 
-### Context
-
-At Sherpa, we develop AI-enabled software applications for management consulting and professional services firms, frequently handling complex, unstructured data sources such as:
-
-- Excel spreadsheets (Survey data, business plans, etc.)
-- PDF reports
-- PowerPoint slide decks
-- Word documents
-
-Our solutions must be multi-tenant, highly secure, and optimised for enterprise scalability and reliability.
-
 ## 📌 Objective
-
 You've been provided with a set of reports, articles and presentations on the topic of artificial intelligence, sourced from top-tier consulting firms (McKinsey, Bain and BCG). The documents include a mix of data — text, tables, charts, and diagrams. Your task is to build a prototype application, within 48 hours, that allows users to explore, synthesise and interrogate the content of these reports using AI-powered techniques.
 
 - Python is preferred, but we welcome other languages if they're your strength. Feel free to use any packages you wish
 - Likewise, we can provide you with AzureOpenAI credentials, but you are also welcome to use an LLM of your choice.
 
-The initial repository and dataset can be found in the below repo, which you create a fork of.
-
-https://github.com/Charter-AI/sherpa-technical-task
-
-> **Note:** We do not expect a fully-featured, enterprise grade solution. We're evaluating your approach to problem-solving, handling ambiguity, and creating robust foundations. The task is intentionally open-ended to allow you to also show off your skills. You can choose which step of the process you'd like to focus on, based on your strengths and interests.
-
 ### Deliverables
 
-### Must-Haves
-
+#### Must-Haves
 - A working codebase / repository that offers the user some ability to interact with the data. This can be as simple as the command line if you want to focus more heavily on the backend logic, but it could also be a fancy, deployed, UI if you want to show off your end-to-end development skills.
     - Please invite the following user to your repository: https://github.com/OLT2000
 - README file documenting your thought process and set up instructions
 
-### Nice-to-Haves
-
-Aside from the basic chatbot set-up, we also place positive weightings on submissions that focus on some of the below concepts, as these are challenges that you will face on the job.
-
+#### Nice-to-Haves
 1. **Complex Data Parsing**
     1. Are you able to utilise all of the data contained in the reports (i.e. including the tables, charts and images which contain valuable information)? ⚠️ (Partially Implemented)
         - ✅ Extracted images with precise coordinates from PDFs
@@ -228,7 +252,7 @@ Legend:
 - ⚠️ Partially Implemented
 - ⏳ Work in Progress/Planned
 
-### Scalability ⚠️
+### Scalability Implementation ⚠️
 1. **Distributed Processing with Ray**
    - Implemented Ray for parallel document processing across multiple cores
    - Ray's actor model enables efficient distribution of document chunks
@@ -246,3 +270,8 @@ Ray was chosen for its:
 - Built-in fault tolerance
 - Scalable from single machine to cluster deployment
 - Simple API that works with existing Python code
+
+---
+### Author
+**Zahara Miriam**  
+Email: miriam_z@icloud.com

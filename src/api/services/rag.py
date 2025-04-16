@@ -56,22 +56,20 @@ class RAGService:
         try:
             logger.info(f"Querying Weaviate for tenant {tenant_id}")
 
-            # Query with tenant isolation
-            response = (
-                self.client.query.get("DocumentChunk")
-                .with_tenant(tenant_id)
-                .with_near_text({"concepts": [query]})
-                .with_limit(max_results)
-                .with_additional(["distance"])
-                .do()
+            # Query with tenant isolation using v4 syntax
+            collection = self.client.collections.get("DocumentChunk").with_tenant(
+                tenant_id
             )
 
+            # Build and execute query
+            response = collection.query.near_text(query=query, limit=max_results)
+
             # Get objects from response
-            objects = response.get("data", {}).get("Get", {}).get("DocumentChunk", [])
+            objects = response.objects
             logger.info(f"Retrieved {len(objects)} chunks")
 
             # Extract context from chunks
-            context = [obj.get("content", "") for obj in objects]
+            context = [obj.properties["content"] for obj in objects]
             context_str = "\n".join(context)
 
             # Generate answer using LLM
@@ -82,9 +80,9 @@ class RAGService:
                 "answer": answer.content,
                 "sources": [
                     {
-                        "document_id": obj.get("document_id", "Unknown"),
-                        "metadata": obj.get("metadata", {}),
-                        "distance": obj.get("_additional", {}).get("distance", 1.0),
+                        "document_id": obj.properties.get("document_id", "Unknown"),
+                        "metadata": obj.properties.get("metadata", {}),
+                        "distance": 1.0,  # Default distance since not available in v4
                     }
                     for obj in objects
                 ],
