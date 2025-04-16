@@ -142,12 +142,12 @@ class ConsultingReportProcessor:
                 filename=pdf_path,
                 extract_images_in_pdf=True,
                 infer_table_structure=True,
-                strategy="fast", # testing 
+                strategy="hi_res",
                 extract_image_block_types=["Image"],
                 extract_image_block_to_payload=True,
                 include_metadata=True,
                 ocr_languages=["eng"],
-                pdf_image_dpi=150, # testing 
+                pdf_image_dpi=150,  # testing
             )
 
             # Debug: Print what we got
@@ -277,6 +277,9 @@ class ConsultingReportProcessor:
                                 )
 
                                 if image_path:
+                                    coord = getattr(
+                                        element.metadata, "coordinates", None
+                                    )
                                     image_info = {
                                         "id": f"image_{len(images)}",
                                         "path": image_path,
@@ -288,8 +291,8 @@ class ConsultingReportProcessor:
                                             if current_section
                                             else None
                                         ),
-                                        "coordinates": getattr(
-                                            element.metadata, "coordinates", None
+                                        "coordinates": (
+                                            str(coord) if coord is not None else None
                                         ),
                                     }
 
