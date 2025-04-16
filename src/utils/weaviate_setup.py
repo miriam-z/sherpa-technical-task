@@ -18,98 +18,65 @@ logging.basicConfig(
 )
 
 
-def setup_weaviate_client(username: str = None, tenant: str = None) -> WeaviateClient:
-    """Initialize Weaviate client with schema and RBAC"""
-    # Load environment variables
-    load_dotenv()
-
-    # Validate environment variables
-    weaviate_url = os.getenv("WEAVIATE_URL")
-    weaviate_api_key = os.getenv("WEAVIATE_API_KEY")
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-
-    if not all([weaviate_url, weaviate_api_key, openai_api_key]):
-        raise ValueError("Missing required environment variables")
-
+def setup_weaviate_client(username: str = None, tenant: str = None) -> weaviate.Client:
+    """Set up Weaviate client and schema"""
     try:
-        # Initialize client with v4 syntax for cloud instance
+        # Initialize client
         client = weaviate.connect_to_weaviate_cloud(
-            cluster_url=weaviate_url,
-            auth_credentials=AuthApiKey(api_key=weaviate_api_key),
-            headers={"X-OpenAI-Api-Key": openai_api_key},
-        )
-
-        logging.info(f"Connected to Weaviate at {weaviate_url}")
-
-        # Delete existing collection if it exists
-        if client.collections.exists("DocumentChunk"):
-            logging.info("Deleting existing DocumentChunk collection")
-            client.collections.delete("DocumentChunk")
-            logging.info("Deleted existing DocumentChunk collection")
-
-        # Define properties for the collection
-        properties = [
-            # Core identifiers
-            {"name": "chunk_id", "data_type": DataType.TEXT},
-            {"name": "document_id", "data_type": DataType.TEXT},
-            {"name": "tenant_id", "data_type": DataType.TEXT},
-            # Content
-            {"name": "content", "data_type": DataType.TEXT},
-            {"name": "summary", "data_type": DataType.TEXT},
-            {"name": "page_number", "data_type": DataType.NUMBER},
-            # Section information
-            {"name": "section_title", "data_type": DataType.TEXT},
-            {"name": "section_path", "data_type": DataType.TEXT_ARRAY},
-            # Metadata
-            {
-                "name": "metadata",
-                "data_type": DataType.OBJECT,
-                "nested_properties": [
-                    {"name": "source", "data_type": DataType.TEXT},
-                    {"name": "extraction_date", "data_type": DataType.TEXT},
-                ],
+            cluster_url=os.getenv("WEAVIATE_URL"),
+            auth_credentials=AuthApiKey(api_key=os.getenv("WEAVIATE_API_KEY")),
+            headers={
+                "X-OpenAI-Api-Key": os.getenv("OPENAI_API_KEY"),
+                "Content-Type": "application/json",
             },
-        ]
-
-        # Create collection with configuration
-        collection = client.collections.create(
-            name="DocumentChunk",
-            description="Document chunks with metadata and hierarchy",
-            properties=properties,
-            vectorizer_config=Configure.Vectorizer.text2vec_openai(),
-            multi_tenancy_config=Configure.multi_tenancy(
-                enabled=True, auto_tenant_creation=False, auto_tenant_activation=True
-            ),
         )
-        logging.info("Created DocumentChunk collection with complete configuration")
 
-        # Debug: Print the actual collection configuration
-        actual_config = collection.config.get()
-        logging.info("Actual collection configuration:")
-        pprint.pprint(actual_config)
+        # Only create collection if it doesn't exist
+        if not client.collections.exists("DocumentChunk"):
+            collection = client.collections.create(
+                name="DocumentChunk",
+                description="Document chunks with metadata and hierarchy",
+                properties=properties,
+                vectorizer_config=Configure.Vectorizer.text2vec_openai(
+                    model="text-embedding-3-small",
+                    dimensions=1536,
+                    vectorize_collection_name=False,
+                ),
+                multi_tenancy_config=Configure.multi_tenancy(
+                    enabled=True, auto_tenant_creation=True, auto_tenant_activation=True
+                ),
+                generative_config=Configure.Generative.openai(),
+            )
+            logging.info("Created new DocumentChunk collection")
+        else:
+            collection = client.collections.get("DocumentChunk")
+            logging.info("Using existing DocumentChunk collection")
 
         return client
 
     except Exception as e:
-        logging.error(f"Error creating schema: {str(e)}")
-        if "client" in locals():
-            client.close()
+        logging.error(f"Error setting up Weaviate: {str(e)}")
         raise
 
 
-def validate_embedding(client: WeaviateClient, chunk_id: str) -> bool:
+def validate_embedding(
+    client: WeaviateClient, chunk_id: str, tenant_id: str = None
+) -> bool:
     """Validate that a chunk has been properly embedded"""
     try:
-        # Get the object with vector
-        result = client.collections.get("DocumentChunk").get(
-            uuid=chunk_id, include_vector=True
-        )
+        # Get the collection and set tenant context if provided
+        collection = client.collections.get("DocumentChunk")
+        if tenant_id:
+            collection = collection.with_tenant(tenant_id)
 
-        if not result or "vector" not in result:
+        # Get the object with vector
+        result = collection.query.fetch_object_by_id(uuid=chunk_id, include_vector=True)
+
+        if not result or not hasattr(result, "vector"):
             logging.error(f"No vector found for chunk {chunk_id}")
             return False
 
-        vector = result["vector"]
+        vector = result.vector
         if not vector or len(vector) == 0:
             logging.error(f"Empty vector for chunk {chunk_id}")
             return False
@@ -123,21 +90,27 @@ def validate_embedding(client: WeaviateClient, chunk_id: str) -> bool:
 
 
 def validate_chunk_relationships(
-    client: WeaviateClient, chunk_id: str
+    client: WeaviateClient, chunk_id: str, tenant_id: str = None
 ) -> Dict[str, Any]:
     """Validate relationships for a chunk"""
     try:
-        result = client.collections.get("DocumentChunk").get(uuid=chunk_id)
+        # Get the collection and set tenant context if provided
+        collection = client.collections.get("DocumentChunk")
+        if tenant_id:
+            collection = collection.with_tenant(tenant_id)
+
+        # Get the object
+        result = collection.query.fetch_object_by_id(uuid=chunk_id)
 
         if not result:
             return {"valid": False, "error": "Chunk not found"}
 
         # Check required relationship fields
         relationships = {
-            "parent_chunk_id": result.get("parent_chunk_id"),
-            "child_chunk_ids": result.get("child_chunk_ids", []),
-            "related_image_ids": result.get("related_image_ids", []),
-            "related_table_ids": result.get("related_table_ids", []),
+            "parent_chunk_id": getattr(result, "parent_chunk_id", None),
+            "child_chunk_ids": getattr(result, "child_chunk_ids", []),
+            "related_image_ids": getattr(result, "related_image_ids", []),
+            "related_table_ids": getattr(result, "related_table_ids", []),
         }
 
         # Log relationship status
@@ -156,7 +129,7 @@ def validate_chunk_relationships(
 
 
 def validate_batch_embeddings(
-    client: WeaviateClient, chunk_ids: List[str]
+    client: WeaviateClient, chunk_ids: List[str], tenant_id: str = None
 ) -> Dict[str, int]:
     """Validate embeddings for a batch of chunks"""
     results = {
@@ -169,13 +142,13 @@ def validate_batch_embeddings(
 
     for chunk_id in chunk_ids:
         # Validate embedding
-        if validate_embedding(client, chunk_id):
+        if validate_embedding(client, chunk_id, tenant_id):
             results["valid_embeddings"] += 1
         else:
             results["invalid_embeddings"] += 1
 
         # Validate relationships
-        rel_result = validate_chunk_relationships(client, chunk_id)
+        rel_result = validate_chunk_relationships(client, chunk_id, tenant_id)
         if rel_result["valid"]:
             results["valid_relationships"] += 1
         else:
@@ -217,18 +190,67 @@ def batch_store_chunks(client: WeaviateClient, chunks: list) -> tuple:
     failed = 0
     chunk_ids = []
 
-    for chunk in chunks:
-        try:
-            store_chunk(client, chunk)
-            successful += 1
-            chunk_ids.append(chunk["chunk_id"])
-        except Exception as e:
-            logging.error(f"Failed to store chunk: {str(e)}")
-            failed += 1
+    try:
+        # Get the collection
+        collection = client.collections.get("DocumentChunk")
 
-    # Validate the batch if we have successful chunks
-    if chunk_ids:
-        validation_results = validate_batch_embeddings(client, chunk_ids)
-        logging.info(f"Batch validation results: {validation_results}")
+        # Get the tenant ID from the first chunk
+        tenant_id = chunks[0].get("tenant_id") if chunks else None
+        if not tenant_id:
+            raise ValueError("No tenant_id found in chunks")
 
-    return successful, failed
+        logging.info(f"Starting batch operation for tenant {tenant_id}")
+
+        # Get tenant-specific collection
+        tenant_collection = collection.with_tenant(tenant_id)
+
+        # Start a batch
+        with tenant_collection.batch.dynamic() as batch:
+            for chunk in chunks:
+                try:
+                    # Verify tenant ID matches
+                    if chunk.get("tenant_id") != tenant_id:
+                        raise ValueError(
+                            f"Chunk tenant_id {chunk.get('tenant_id')} does not match batch tenant_id {tenant_id}"
+                        )
+
+                    # Add the chunk to the batch
+                    batch.add_object(properties=chunk, uuid=chunk["chunk_id"])
+                    successful += 1
+                    chunk_ids.append(chunk["chunk_id"])
+
+                    # Log every 50 chunks
+                    if successful % 50 == 0:
+                        logging.info(f"Added {successful} chunks to batch")
+
+                except Exception as e:
+                    logging.error(f"Failed to add chunk to batch: {str(e)}")
+                    failed += 1
+
+        logging.info(
+            f"Batch operation completed. Successfully added {successful} chunks to batch"
+        )
+
+        # Verify chunks were stored
+        if chunk_ids:
+            # Try to retrieve a few chunks to verify storage
+            test_chunks = chunk_ids[:5]  # Test first 5 chunks
+            for chunk_id in test_chunks:
+                try:
+                    result = tenant_collection.query.fetch_object_by_id(uuid=chunk_id)
+                    if result:
+                        logging.info(f"Verified chunk {chunk_id} exists in Weaviate")
+                    else:
+                        logging.error(f"Chunk {chunk_id} not found in Weaviate")
+                except Exception as e:
+                    logging.error(f"Error verifying chunk {chunk_id}: {str(e)}")
+
+            # Run validation
+            validation_results = validate_batch_embeddings(client, chunk_ids, tenant_id)
+            logging.info(f"Batch validation results: {validation_results}")
+
+        return successful, failed
+
+    except Exception as e:
+        logging.error(f"Error in batch operation: {str(e)}")
+        return successful, failed
