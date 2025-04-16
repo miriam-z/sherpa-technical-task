@@ -59,13 +59,13 @@ def test_vector_generation():
         )
 
         if query_result and len(query_result.objects) > 0:
-            logger.info("✅ Similarity search successful!")
+            logger.info(" Similarity search successful!")
             logger.info(
                 f"Found matching content: {query_result.objects[0].properties['content']}"
             )
             return True
         else:
-            logger.error("❌ No results from similarity search")
+            logger.error(" No results from similarity search")
             return False
 
     except Exception as e:

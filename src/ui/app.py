@@ -51,11 +51,11 @@ if st.button("Submit Query", type="primary"):
                 result = response.json()
 
                 # Display answer
-                st.markdown("### 💡 Answer")
+                st.markdown("### Answer")
                 st.write(result["answer"])
 
                 # Display sources
-                st.markdown("### 📄 Sources")
+                st.markdown("### Sources")
                 for i, source in enumerate(result["sources"], 1):
                     with st.expander(f"Source {i}: {source['document_id']}"):
                         st.json(source["metadata"])

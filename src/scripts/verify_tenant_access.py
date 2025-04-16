@@ -56,7 +56,7 @@ def main():
     # Print summary
     logger.info("\nTest Results:")
     for tenant_id, success in results.items():
-        status = "✅ Success" if success else "❌ Failed"
+        status = " Success" if success else " Failed"
         logger.info(f"{tenant_id.upper()}: {status}")
 
 
