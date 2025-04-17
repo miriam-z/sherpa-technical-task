@@ -1,4 +1,7 @@
+import asyncio
+import sys
 import os
+import logging
 import logging
 from pathlib import Path
 from typing import Dict, List
@@ -6,6 +9,10 @@ from store_vectors import process_directory
 from utils.weaviate_setup import setup_weaviate_client
 
 # Configure logging
+import asyncio
+if hasattr(asyncio, 'WindowsSelectorEventLoopPolicy'):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )

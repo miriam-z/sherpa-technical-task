@@ -83,7 +83,7 @@ def process_and_store_document(
     """Process a document and store its chunks in Weaviate"""
     try:
         # Initialize processor (and Weaviate client only if not parse_only)
-        processor = ConsultingReportProcessor()
+        processor = ConsultingReportProcessor(extract_images=True)
         logging.info(f"Processing document: {pdf_path}")
         result = processor.process_report(pdf_path)
 
@@ -95,9 +95,26 @@ def process_and_store_document(
             out_dir = os.path.join(output_dir, company, filename)
             os.makedirs(out_dir, exist_ok=True)
             out_path = os.path.join(out_dir, "result.json")
-            with open(out_path, "w") as f:
-                json.dump(result, f, indent=2)
-            logging.info(f"Wrote parsed output to {out_path}")
+            # Sanitize all chunk metadata for JSON serialization
+            def make_json_serializable(obj):
+                if isinstance(obj, (tuple, set)):
+                    return list(obj)
+                if hasattr(obj, "__dict__"):
+                    return str(obj)
+                return obj
+
+            if "chunks" in result:
+                for chunk in result["chunks"]:
+                    if "metadata" in chunk:
+                        chunk["metadata"] = {k: make_json_serializable(v) for k, v in chunk["metadata"].items()}
+
+            try:
+                with open(out_path, "w") as f:
+                    json.dump(result, f, indent=2)
+                logging.info(f"Wrote parsed output to {out_path}")
+            except Exception as e:
+                logging.error(f"Failed to write results.json: {e}")
+                raise
             return 1, 0
 
         # Otherwise, proceed with Weaviate logic

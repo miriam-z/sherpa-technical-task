@@ -171,6 +171,5 @@ cython_debug/
 .pypirc
 
 # Output files
-
 processed_outputs
 test_data

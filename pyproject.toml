@@ -13,6 +13,7 @@ dependencies = [
     "llama-index>=0.11.23",
     "llama-index-core>=0.11.23",
     "llama-index-readers-file>=0.3.0",
+    "markdownify>=1.1.0",
     "pdf2image>=1.17.0",
     "pdfminer-six>=20250327",
     "pi-heif>=0.22.0",
