@@ -173,3 +173,5 @@ cython_debug/
 # Output files
 processed_outputs
 test_data
+figures
+.DS_Store

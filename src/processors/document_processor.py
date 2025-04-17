@@ -13,6 +13,48 @@ import os
 from PIL import Image as PILImage
 import io
 import markdownify
+import pytesseract
+from pydantic import BaseModel, Field, ValidationError
+from typing import Any
+
+
+class ChunkModel(BaseModel):
+    chunk_id: str
+    doc_id: str
+    modality: str
+    content: str
+    type: str
+    page_number: int
+    section_path: list = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    ocr_text: str = ""
+    summary: str = ""
+    prev_chunk: Any = None
+    next_chunk: Any = None
+
+
+def make_json_serializable(obj):
+    """
+    Recursively convert objects to JSON-serializable types.
+    Converts frozenset/set to list, objects with __dict__ to dict, and all non-serializable types to string.
+    """
+    import json
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(make_json_serializable(v) for v in obj)
+    elif isinstance(obj, frozenset) or isinstance(obj, set):
+        return list(obj)
+    elif hasattr(obj, '__dict__'):
+        return make_json_serializable(obj.__dict__)
+    else:
+        try:
+            json.dumps(obj)
+            return obj
+        except Exception:
+            return str(obj)
 
 # Configure logging
 logging.basicConfig(
@@ -82,14 +124,10 @@ class ConsultingReportProcessor:
             # ---
             logger.info("Extracting content with unstructured...")
             elements = partition_pdf(
-                filename=pdf_path,
-                extract_images_in_pdf=True,
-                infer_table_structure=True,
+                pdf_path,
                 strategy="hi_res",
-                extract_image_block_types=["Image"],
-                extract_image_block_to_payload=True,
-                include_metadata=True,
-                languages=["eng"],
+                extract_images_in_pdf=self.extract_images,
+                extract_image_block_types=["Image", "Table"],
                 pdf_image_dpi=150,
             )
 
@@ -118,8 +156,9 @@ class ConsultingReportProcessor:
             multimodal_chunks = []
             image_counter = 0
             output_dir = os.getenv('OUTPUT_DIR', 'processed_outputs')
+            # Remove creation of images_dir in processed_outputs unless actually needed
             images_dir = os.path.join(output_dir, 'images')
-            os.makedirs(images_dir, exist_ok=True)
+            # Only create images_dir if an image is actually saved there (see below)
 
             for element in elements:
                 if element is None:
@@ -131,49 +170,81 @@ class ConsultingReportProcessor:
                     section_path = page_hierarchy.get(page_number, [])
                     chunk_id = str(uuid.uuid4())
 
-                    # TEXT CHUNKS
-                    if isinstance(element, Text):
+                    # MULTIMODAL CHUNK LOGIC
+                    # ---
+                    # 1. If Image, always add as image chunk (if image_path or image_base64 exists)
+                    # 2. If Table or CompositeElement with HTML, always add as table chunk
+                    # 3. If Text, add as text chunk if it has meaningful content
+                    # ---
+                    # IMAGE CHUNKS
+                    if (hasattr(element, 'metadata') and (
+                        (isinstance(element, Image) and (getattr(element.metadata, 'image_path', None) or 'image_base64' in getattr(element.metadata, '__dict__', {})))
+                    )):
                         try:
-                            # Robust element-to-string conversion
+                            os.makedirs(images_dir, exist_ok=True)
+                            image_counter += 1
+                            # Prefer image_path if present, else decode image_base64
+                            rel_image_path = None
+                            if getattr(element.metadata, 'image_path', None):
+                                abs_image_path = element.metadata.image_path
+                                rel_image_path = os.path.relpath(abs_image_path, start=os.getcwd())
+                            elif 'image_base64' in getattr(element.metadata, '__dict__', {}):
+                                image_b64 = element.metadata.image_base64
+                                img_data = base64.b64decode(image_b64)
+                                img_pil = PILImage.open(io.BytesIO(img_data))
+                                image_filename = f"{doc_id}_page_{page_number}_img_{image_counter}.png"
+                                abs_image_path = os.path.join(images_dir, image_filename)
+                                img_pil.save(abs_image_path)
+                                rel_image_path = os.path.relpath(abs_image_path, start=os.getcwd())
+                            # OCR extraction using pytesseract
+                            ocr_text = ""
                             try:
-                                element_text = str(element)
-                                if not isinstance(element_text, str):
-                                    element_text = ""
+                                img_path = os.path.join(os.getcwd(), rel_image_path)
+                                img = PILImage.open(img_path)
+                                ocr_text = pytesseract.image_to_string(img)
                             except Exception as e:
-                                logger.error(f"Error converting element to string: {e}")
-                                element_text = ""
-                            element_text = str(element) if element else ""
+                                logger.warning(f"OCR failed for image {rel_image_path}: {e}")
+                                ocr_text = ""
+                            # Clean metadata, remove _known_field_names if present
+                            metadata = make_json_serializable(element.metadata.__dict__) if hasattr(element.metadata, '__dict__') else {}
+                            if '_known_field_names' in metadata:
+                                metadata.pop('_known_field_names', None)
+                            # Build chunk dict and validate with Pydantic
+                            chunk_dict = {
+                                "chunk_id": str(uuid.uuid4()),
+                                "doc_id": doc_id,
+                                "modality": "image",
+                                "content": rel_image_path or "",
+                                "type": "image",
+                                "page_number": page_number,
+                                "section_path": section_path,
+                                "metadata": metadata,
+                                "ocr_text": ocr_text or "",
+                                "summary": self._generate_summary(ocr_text) if ocr_text else "",
+                                "prev_chunk": prev_chunk_id,
+                            }
+                            try:
+                                chunk = ChunkModel(**chunk_dict).model_dump()
+                            except ValidationError as ve:
+                                logger.error(f"Chunk validation error: {ve}")
+                                continue
+                            logger.info(f"Extracted image chunk: {chunk['chunk_id']} saved at {rel_image_path} (page {page_number}, section {section_path})")
+                            multimodal_chunks.append(chunk)
+                            prev_chunk_id = chunk["chunk_id"]
                         except Exception as e:
-                            logger.error(f"Error converting element to string: {e}")
-                            element_text = ""
-                        if not element_text or len(element_text.strip()) < 15 or not any(c.isalnum() for c in element_text):
+                            logger.error(f"Error saving image chunk: {e}")
                             continue
-                        chunk = {
-                            "chunk_id": chunk_id,
-                            "doc_id": doc_id,
-                            "modality": "text",
-                            "content": element_text.strip(),
-                            "type": "text",
-                            "page_number": page_number,
-                            "section_path": section_path,
-                            "metadata": {
-                                "element_type": element_type,
-                            },
-                            "summary": self._generate_summary(element_text) or "",
-                            "prev_chunk": prev_chunk_id,
-                        }
-                        multimodal_chunks.append(chunk)
-                        prev_chunk_id = chunk_id
 
                     # TABLE CHUNKS
-                    elif isinstance(element, CompositeElement) and hasattr(element, 'metadata') and getattr(element.metadata, 'text_as_html', None):
+                    elif (isinstance(element, CompositeElement) and hasattr(element, 'metadata') and getattr(element.metadata, 'text_as_html', None)):
                         html_table = getattr(element.metadata, 'text_as_html', None)
                         if html_table:
                             table_md = markdownify.markdownify(html_table, heading_style="ATX")
-                            if len(table_md.strip()) < 10:
-                                continue
                             table_chunk_id = str(uuid.uuid4())
-                            chunk = {
+                            metadata = make_json_serializable(element.metadata.__dict__) if hasattr(element.metadata, '__dict__') else {}
+                            if '_known_field_names' in metadata:
+                                metadata.pop('_known_field_names', None)
+                            chunk_dict = {
                                 "chunk_id": table_chunk_id,
                                 "doc_id": doc_id,
                                 "modality": "table",
@@ -181,48 +252,57 @@ class ConsultingReportProcessor:
                                 "type": "table",
                                 "page_number": page_number,
                                 "section_path": section_path,
-                                "metadata": {
-                                    "element_type": element_type,
-                                },
+                                "metadata": metadata,
+                                "ocr_text": "",
                                 "summary": self._generate_summary(table_md) or "",
                                 "prev_chunk": prev_chunk_id,
                             }
+                            try:
+                                chunk = ChunkModel(**chunk_dict).model_dump()
+                            except ValidationError as ve:
+                                logger.error(f"Chunk validation error: {ve}")
+                                continue
                             logger.info(f"Extracted table chunk: {chunk['chunk_id']} on page {page_number} in section {section_path}")
                             multimodal_chunks.append(chunk)
                             prev_chunk_id = table_chunk_id
 
-                    # IMAGE CHUNKS
-                    elif isinstance(element, Image) and getattr(element, 'image', None) is not None:
+                    # TEXT CHUNKS
+                    elif isinstance(element, Text):
                         try:
-                            image_counter += 1
-                            img_data = element.image
-                            img_pil = PILImage.open(io.BytesIO(img_data)) if isinstance(img_data, (bytes, bytearray)) else img_data
-                            image_filename = f"image_{doc_id}_{image_counter}.png"
-                            image_path = os.path.join(images_dir, image_filename)
-                            img_pil.save(image_path)
-                            # Optionally run OCR or captioning here
-                            ocr_text = getattr(element.metadata, 'ocr_text', None)
-                            chunk = {
-                                "chunk_id": str(uuid.uuid4()),
-                                "doc_id": doc_id,
-                                "modality": "image",
-                                "content": image_path,
-                                "type": "image",
-                                "page_number": page_number,
-                                "section_path": section_path,
-                                "metadata": {
-                                    "element_type": element_type,
-                                },
-                                "ocr_text": ocr_text or "",
-                                "summary": self._generate_summary(ocr_text) if ocr_text else "",
-                                "prev_chunk": prev_chunk_id,
-                            }
-                            logger.info(f"Extracted image chunk: {chunk['chunk_id']} saved at {image_path} (page {page_number}, section {section_path})")
-                            multimodal_chunks.append(chunk)
-                            prev_chunk_id = chunk["chunk_id"]
+                            element_text = str(element) if element else ""
                         except Exception as e:
-                            logger.error(f"Error saving image chunk: {e}")
+                            logger.error(f"Error converting element to string: {e}")
+                            element_text = ""
+                        if not element_text or len(element_text.strip()) < 15 or not any(c.isalnum() for c in element_text):
                             continue
+                        metadata = make_json_serializable(element.metadata.__dict__) if hasattr(element.metadata, '__dict__') else {}
+                        if '_known_field_names' in metadata:
+                            metadata.pop('_known_field_names', None)
+                        chunk_dict = {
+                            "chunk_id": chunk_id,
+                            "doc_id": doc_id,
+                            "modality": "text",
+                            "content": element_text.strip(),
+                            "type": "text",
+                            "page_number": page_number,
+                            "section_path": section_path,
+                            "metadata": metadata,
+                            "ocr_text": "",
+                            "summary": self._generate_summary(element_text) or "",
+                            "prev_chunk": prev_chunk_id,
+                        }
+                        try:
+                            chunk = ChunkModel(**chunk_dict).model_dump()
+                        except ValidationError as ve:
+                            logger.error(f"Chunk validation error: {ve}")
+                            continue
+                        multimodal_chunks.append(chunk)
+                        prev_chunk_id = chunk_id
+
+                    # FALLBACK: If element is not recognized, log and skip
+                    else:
+                        logger.warning(f"Skipping unrecognized element type: {element_type} on page {page_number}")
+                        continue
 
                 except Exception as e:
                     logger.error(f"Error processing multimodal element: {e}")
