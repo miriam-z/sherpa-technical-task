@@ -5,6 +5,12 @@
 ### Overview
 This solution implements a basic RAG (Retrieval Augmented Generation) system for processing and querying consulting reports with strict data isolation between tenants. The current implementation focuses on core functionality and provides a foundation for further enhancements.
 
+#### Document Parsing Approach
+- **Hierarchy Preservation:** Accurate extraction of document hierarchy (sections, subsections, tables) is critical for consulting reports.
+- **Current Limitation:** Basic parsing modes (Unstructured, LlamaParse default) do not reliably preserve hierarchy; outputs are often flat or loosely structured.
+- **Ongoing Evaluation:** We are actively experimenting with advanced LlamaParse modes (LVM, agent-based parsing) to improve structure extraction. Outputs are compared for section fidelity and ease of downstream use.
+- **Next Steps:** Update the pipeline to use the parsing mode that best preserves hierarchy and document order.
+
 ### Architecture
 - **Document Processing**: Unstructured + LlamaIndex for PDF parsing
 - **Vector Storage**: Weaviate with multi-tenancy
