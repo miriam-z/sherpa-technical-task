@@ -87,72 +87,74 @@ def process_and_store_document(
         logging.info(f"Processing document: {pdf_path}")
         result = processor.process_report(pdf_path)
 
-        # If parse_only, write result to results.json and return
+        # Always write result.json after processing
+        def make_json_serializable(obj):
+            if isinstance(obj, (tuple, set)):
+                return list(obj)
+            if hasattr(obj, "__dict__"):
+                return str(obj)
+            return obj
+
+        os.makedirs(output_dir, exist_ok=True)
+        company = result.get("document", {}).get("company", tenant_id)
+        filename = os.path.splitext(os.path.basename(pdf_path))[0]
+        out_dir = os.path.join(output_dir, company, filename)
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, "result.json")
+        if "chunks" in result:
+            for chunk in result["chunks"]:
+                if "metadata" in chunk:
+                    chunk["metadata"] = {k: make_json_serializable(v) for k, v in chunk["metadata"].items()}
+        try:
+            with open(out_path, "w") as f:
+                json.dump(result, f, indent=2)
+            logging.info(f"Wrote parsed output to {out_path}")
+        except Exception as e:
+            logging.error(f"Failed to write results.json: {e}")
+            raise
+
         if parse_only:
-            os.makedirs(output_dir, exist_ok=True)
-            company = result.get("document", {}).get("company", tenant_id)
-            filename = os.path.splitext(os.path.basename(pdf_path))[0]
-            out_dir = os.path.join(output_dir, company, filename)
-            os.makedirs(out_dir, exist_ok=True)
-            out_path = os.path.join(out_dir, "result.json")
-            # Sanitize all chunk metadata for JSON serialization
-            def make_json_serializable(obj):
-                if isinstance(obj, (tuple, set)):
-                    return list(obj)
-                if hasattr(obj, "__dict__"):
-                    return str(obj)
-                return obj
-
-            if "chunks" in result:
-                for chunk in result["chunks"]:
-                    if "metadata" in chunk:
-                        chunk["metadata"] = {k: make_json_serializable(v) for k, v in chunk["metadata"].items()}
-
-            try:
-                with open(out_path, "w") as f:
-                    json.dump(result, f, indent=2)
-                logging.info(f"Wrote parsed output to {out_path}")
-            except Exception as e:
-                logging.error(f"Failed to write results.json: {e}")
-                raise
             return 1, 0
 
         # Otherwise, proceed with Weaviate logic
         client = setup_weaviate_client(username=username, tenant=tenant_id)
-        document_id = str(uuid.uuid4())
-        chunks = []
-        for chunk in result.get("chunks", []):
-            chunk_data = DocumentChunk(
-                chunk_id=str(uuid.uuid4()),
-                document_id=document_id,
-                tenant_id=tenant_id,
-                content=chunk["content"],
-                summary=chunk.get("summary", ""),
-                page_number=chunk.get("page_number", 0),
-                chunk_type=chunk.get("type", "text"),
-                metadata={
-                    "source": os.path.basename(pdf_path),
-                    "document_metadata": result.get("document_metadata", {}),
-                    "section_path": chunk.get("section_path", []),
-                    **chunk.get("metadata", {}),
-                },
-                relationships={
-                    "next_chunk": chunk.get("next_chunk", ""),
-                    "prev_chunk": chunk.get("prev_chunk", ""),
-                    "related_images": chunk.get("related_images", []),
-                    "related_tables": chunk.get("related_tables", []),
-                },
-            ).dict()
-            chunks.append(chunk_data)
+        try:
+            document_id = str(uuid.uuid4())
+            chunks = []
+            for chunk in result.get("chunks", []):
+                chunk_data = DocumentChunk(
+                    chunk_id=str(uuid.uuid4()),
+                    document_id=document_id,
+                    tenant_id=tenant_id,
+                    content=chunk["content"],
+                    summary=chunk.get("summary", ""),
+                    page_number=chunk.get("page_number", 0),
+                    chunk_type=chunk.get("type", "text"),
+                    metadata={
+                        "source": os.path.basename(pdf_path),
+                        "document_metadata": result.get("document_metadata", {}),
+                        "section_path": chunk.get("section_path", []),
+                        **chunk.get("metadata", {}),
+                    },
+                    relationships={
+                        "next_chunk": chunk.get("next_chunk", ""),
+                        "prev_chunk": chunk.get("prev_chunk", ""),
+                        "related_images": chunk.get("related_images", []),
+                        "related_tables": chunk.get("related_tables", []),
+                    },
+                ).model_dump()
+                chunks.append(chunk_data)
 
-        if chunks:
-            logging.info(f"Storing {len(chunks)} chunks in Weaviate")
-            successful, failed = batch_store_chunks(client, chunks)
-            logging.info(f"Successfully stored {successful} chunks, {failed} failed")
-            return successful, failed
-        else:
-            logging.warning("No chunks found to store")
-            return 0, 0
+            if chunks:
+                logging.info(f"Storing {len(chunks)} chunks in Weaviate")
+                successful, failed = batch_store_chunks(client, chunks)
+                logging.info(f"Successfully stored {successful} chunks, {failed} failed")
+                return successful, failed
+            else:
+                logging.warning("No chunks found to store")
+                return 0, 0
+        finally:
+            client.close()
 
     except Exception as e:
         logging.error(f"Error processing document {pdf_path}: {str(e)}")
