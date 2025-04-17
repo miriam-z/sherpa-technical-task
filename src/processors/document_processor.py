@@ -27,7 +27,7 @@ class ConsultingReportProcessor:
         self.extract_images = extract_images
         self.batch_size = batch_size
         self.llama_parser = LlamaParse(
-            api_key=os.getenv("LLAMA_API_KEY"), result_type="markdown"
+            api_key=os.getenv("LLAMA_API_KEY"), result_type="json"
         )
 
     def _process_text_batch(self, texts: List[str]) -> List[Optional[str]]:
@@ -85,12 +85,25 @@ class ConsultingReportProcessor:
             # Get document structure from llama_parse
             logger.info("Getting document structure with llama_parse...")
             parsed_doc = self.llama_parser.load_data(pdf_path)
+            logger.info(f"DEBUG: llama_parse output type={type(parsed_doc)}, repr={repr(parsed_doc)[:500]}")
             # Build a mapping from page number to hierarchical path using llama_parse
             page_hierarchy = {}
-            for section in parsed_doc.get("sections", []):
-                pages = section.get("pages", [])
-                for page in pages:
-                    page_hierarchy[page] = section.get("path", [])
+            if isinstance(parsed_doc, list):
+                for doc_obj in parsed_doc:
+                    logger.info(f"DEBUG: doc_obj attributes: {dir(doc_obj)}")
+                    logger.info(f"DEBUG: doc_obj.metadata: {getattr(doc_obj, 'metadata', None)}")
+                    logger.info(f"DEBUG: doc_obj.text: {getattr(doc_obj, 'text', None)[:200] if getattr(doc_obj, 'text', None) else None}")
+                    # TODO: Extract page and hierarchy info from doc_obj.metadata or doc_obj.text
+                    # Example: if doc_obj.metadata and 'pages' in doc_obj.metadata:
+                    #     for page in doc_obj.metadata['pages']:
+                    #         page_hierarchy[page] = doc_obj.metadata.get('path', [])
+            elif isinstance(parsed_doc, dict):
+                for section in parsed_doc.get("sections", []):
+                    pages = section.get("pages", [])
+                    for page in pages:
+                        page_hierarchy[page] = section.get("path", [])
+            else:
+                logger.error(f"Unexpected type from llama_parse: {type(parsed_doc)}")
 
             # Initialize containers
             chunks = []

@@ -14,7 +14,7 @@ import ray
 import uuid
 from datetime import datetime
 import logging
-from pydantic import validator
+from pydantic import field_validator
 
 # Load environment variables
 load_dotenv()
@@ -67,7 +67,8 @@ class DocumentChunk(BaseModel):
     metadata: Dict[str, Any]
     relationships: Dict[str, Any]
 
-    @validator("summary", pre=True)
+    @field_validator("summary", mode="before")
+    @classmethod
     def convert_none_to_empty_string(cls, v):
         return "" if v is None else str(v)
 
@@ -77,21 +78,31 @@ def process_and_store_document(
     tenant_id: str,
     output_dir: str = "processed_outputs",
     username: str = None,
+    parse_only: bool = False,
 ) -> tuple:
     """Process a document and store its chunks in Weaviate"""
     try:
-        # Initialize processor and Weaviate client with RBAC
+        # Initialize processor (and Weaviate client only if not parse_only)
         processor = ConsultingReportProcessor()
-        client = setup_weaviate_client(username=username, tenant=tenant_id)
-
-        # Process the document
         logging.info(f"Processing document: {pdf_path}")
         result = processor.process_report(pdf_path)
 
-        # Generate document ID
-        document_id = str(uuid.uuid4())
+        # If parse_only, write result to results.json and return
+        if parse_only:
+            os.makedirs(output_dir, exist_ok=True)
+            company = result.get("document", {}).get("company", tenant_id)
+            filename = os.path.splitext(os.path.basename(pdf_path))[0]
+            out_dir = os.path.join(output_dir, company, filename)
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "result.json")
+            with open(out_path, "w") as f:
+                json.dump(result, f, indent=2)
+            logging.info(f"Wrote parsed output to {out_path}")
+            return 1, 0
 
-        # Prepare chunks for storage
+        # Otherwise, proceed with Weaviate logic
+        client = setup_weaviate_client(username=username, tenant=tenant_id)
+        document_id = str(uuid.uuid4())
         chunks = []
         for chunk in result.get("chunks", []):
             chunk_data = DocumentChunk(
@@ -99,7 +110,7 @@ def process_and_store_document(
                 document_id=document_id,
                 tenant_id=tenant_id,
                 content=chunk["content"],
-                summary=chunk.get("summary", ""),  # Default to empty string if None
+                summary=chunk.get("summary", ""),
                 page_number=chunk.get("page_number", 0),
                 chunk_type=chunk.get("type", "text"),
                 metadata={
@@ -117,7 +128,6 @@ def process_and_store_document(
             ).dict()
             chunks.append(chunk_data)
 
-        # Store chunks in Weaviate
         if chunks:
             logging.info(f"Storing {len(chunks)} chunks in Weaviate")
             successful, failed = batch_store_chunks(client, chunks)
@@ -137,6 +147,7 @@ def process_directory(
     tenant_id: str,
     output_dir: str = "processed_outputs",
     username: str = None,
+    parse_only: bool = False,
 ) -> Dict[str, int]:
     """Process all PDF files in a directory"""
     stats = {"processed": 0, "failed": 0, "chunks_stored": 0, "chunks_failed": 0}
@@ -153,7 +164,7 @@ def process_directory(
     for pdf_file in tenant_dir.glob("*.pdf"):
         try:
             successful, failed = process_and_store_document(
-                str(pdf_file), tenant_id, output_dir, username
+                str(pdf_file), tenant_id, output_dir, username, parse_only=parse_only
             )
             stats["processed"] += 1
             stats["chunks_stored"] += successful
@@ -283,15 +294,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--username", default=None, help="Username for RBAC authentication"
     )
+    parser.add_argument(
+        "--parse-only", action="store_true", help="Only parse and write results.json, do not vectorize or upload to Weaviate"
+    )
 
     args = parser.parse_args()
 
     try:
         logging.info(
-            f"Starting processing with input_dir={args.input_dir}, tenant_id={args.tenant_id}"
+            f"Starting processing with input_dir={args.input_dir}, tenant_id={args.tenant_id}, parse_only={args.parse_only}"
         )
         stats = process_directory(
-            args.input_dir, args.tenant_id, args.output_dir, args.username
+            args.input_dir, args.tenant_id, args.output_dir, args.username, parse_only=args.parse_only
         )
         logging.info(f"Processing complete. Stats: {stats}")
     except Exception as e:
