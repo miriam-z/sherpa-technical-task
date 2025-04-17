@@ -246,10 +246,10 @@ def batch_store_chunks(client: weaviate.Client, chunks: list) -> tuple:
                 limit=1,
             )
             if query_result and len(query_result.objects) > 0:
-                logging.info("✅ Verification successful - chunks are searchable")
+                logging.info("Verification successful - chunks are searchable")
             else:
                 logging.warning(
-                    "⚠️ Verification failed - chunks may not be properly vectorized"
+                    "Verification failed - chunks may not be properly vectorized"
                 )
 
         return successful, failed
