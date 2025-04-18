@@ -67,7 +67,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--input-dir",
-        default="test_data",
+        default="mbb_ai_reports",
         help="Directory containing tenant subdirectories with PDFs (default: test_data)",
     )
     parser.add_argument(

@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime
 import logging
 from pydantic import field_validator
+import time
 
 # Load environment variables
 load_dotenv()
@@ -161,6 +162,11 @@ def process_and_store_document(
         raise
 
 
+@ray.remote
+def process_document_remote(pdf_file, tenant_id, output_dir, username, parse_only):
+    return process_and_store_document(pdf_file, tenant_id, output_dir, username, parse_only)
+
+
 def process_directory(
     input_dir: str,
     tenant_id: str,
@@ -168,30 +174,33 @@ def process_directory(
     username: str = None,
     parse_only: bool = False,
 ) -> Dict[str, int]:
-    """Process all PDF files in a directory"""
+    """Process all PDF files in a directory using Ray for parallel processing"""
     stats = {"processed": 0, "failed": 0, "chunks_stored": 0, "chunks_failed": 0}
 
     input_path = Path(input_dir)
     if not input_path.exists():
         raise ValueError(f"Input directory {input_dir} does not exist")
 
-    # Only process PDFs in the tenant-specific subdirectory
     tenant_dir = input_path / tenant_id
     if not tenant_dir.exists():
         raise ValueError(f"Tenant directory {tenant_dir} does not exist")
 
-    for pdf_file in tenant_dir.glob("*.pdf"):
-        try:
-            successful, failed = process_and_store_document(
-                str(pdf_file), tenant_id, output_dir, username, parse_only=parse_only
-            )
-            stats["processed"] += 1
-            stats["chunks_stored"] += successful
-            stats["chunks_failed"] += failed
-            logging.info(f"Successfully processed {pdf_file}")
-        except Exception as e:
-            logging.error(f"Failed to process {pdf_file}: {str(e)}")
-            stats["failed"] += 1
+    # Initialize Ray
+    ray.init(ignore_reinit_error=True)
+
+    # List of Ray tasks
+    tasks = [
+        process_document_remote.remote(str(pdf_file), tenant_id, output_dir, username, parse_only)
+        for pdf_file in tenant_dir.glob("*.pdf")
+    ]
+
+    # Collect results
+    results = ray.get(tasks)
+
+    for successful, failed in results:
+        stats["processed"] += 1
+        stats["chunks_stored"] += successful
+        stats["chunks_failed"] += failed
 
     return stats
 
@@ -289,6 +298,19 @@ def batch_store_chunks(client: weaviate.Client, chunks: list) -> tuple:
         return successful, failed
 
 
+def stress_test(input_dir, tenant_id, output_dir, username, parse_only):
+    start_time = time.time()
+
+    # Process with Ray
+    stats = process_directory(input_dir, tenant_id, output_dir, username, parse_only)
+
+    end_time = time.time()
+    processing_time = end_time - start_time
+
+    logging.info(f"Processing time: {processing_time} seconds")
+    logging.info(f"Stats: {stats}")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -297,8 +319,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--input-dir",
-        default="test_data",
-        help="Directory containing PDF files to process (default: test_data)",
+        default="mbb_ai_reports",
+        help="Directory containing tenant subdirectories with PDFs (default: mbb_ai_reports)",
     )
     parser.add_argument(
         "--tenant-id",
@@ -330,3 +352,6 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Processing failed: {str(e)}")
         exit(1)
+
+    # Example usage for stress testing
+    stress_test("MBB AI reports", "sherpa", "processed_outputs", None, False)
