@@ -7,8 +7,60 @@ from langchain_openai import AzureChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from llama_parse import LlamaParse
-import base64
-import re
+import logging
+import uuid
+import os
+from PIL import Image as PILImage
+import io
+import markdownify
+import pytesseract
+from pydantic import BaseModel, Field, ValidationError
+from typing import Any
+
+
+class ChunkModel(BaseModel):
+    chunk_id: str
+    doc_id: str
+    modality: str
+    content: str
+    type: str
+    page_number: int
+    section_path: list = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    ocr_text: str = ""
+    summary: str = ""
+    prev_chunk: Any = None
+    next_chunk: Any = None
+
+
+def make_json_serializable(obj):
+    """
+    Recursively convert objects to JSON-serializable types.
+    Converts frozenset/set to list, objects with __dict__ to dict, and all non-serializable types to string.
+    """
+    import json
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(make_json_serializable(v) for v in obj)
+    elif isinstance(obj, frozenset) or isinstance(obj, set):
+        return list(obj)
+    elif hasattr(obj, '__dict__'):
+        return make_json_serializable(obj.__dict__)
+    else:
+        try:
+            json.dumps(obj)
+            return obj
+        except Exception:
+            return str(obj)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 class ConsultingReportProcessor:
@@ -21,27 +73,9 @@ class ConsultingReportProcessor:
         self.model = model
         self.extract_images = extract_images
         self.batch_size = batch_size
-        self.current_section = None
-        self.section_counters = {}  # Track figure numbers per section
         self.llama_parser = LlamaParse(
-            api_key=os.getenv("LLAMA_API_KEY"), result_type="markdown"
+            api_key=os.getenv("LLAMA_API_KEY"), result_type="json"
         )
-
-    def _get_section_number(self, title_text: str) -> str:
-        """Extract section number from title text"""
-        # Try to find a section number pattern (e.g., "1.", "1.2.", "A.", etc.)
-        match = re.match(r"^(?:(?:\d+\.)+|\w+\.)\s*", title_text)
-        if match:
-            return match.group(0).strip(".")
-        return None
-
-    def _get_figure_number(self, section_number: str) -> str:
-        """Get next figure number for a section"""
-        if section_number not in self.section_counters:
-            self.section_counters[section_number] = 1
-        else:
-            self.section_counters[section_number] += 1
-        return f"{section_number}-{self.section_counters[section_number]}"
 
     def _process_text_batch(self, texts: List[str]) -> List[Optional[str]]:
         """Process a batch of texts to generate summaries"""
@@ -64,241 +98,244 @@ class ConsultingReportProcessor:
                         summary = chain.invoke({"text": text}) if text.strip() else None
                         batch_summaries.append(summary)
                     except Exception as e:
-                        print(f"Error generating summary: {e}")
+                        logger.error(f"Error generating summary: {e}")
                         batch_summaries.append(None)
                 summaries.extend(batch_summaries)
             return summaries
         except Exception as e:
-            print(f"Error in batch processing: {e}")
+            logger.error(f"Error in batch processing: {e}")
             return [None] * len(texts)
 
     def _generate_summary(self, text: str) -> Optional[str]:
         """Generate a summary for a single text"""
         return self._process_text_batch([text])[0] if text else None
 
-    def _save_image(
-        self, image_content: bytes, pdf_path: str, section_number: str
-    ) -> str:
-        """Save image with proper figure numbering"""
-        company = Path(pdf_path).parent.name
-        doc_name = Path(pdf_path).stem
-        figures_dir = Path("processed_outputs") / company / doc_name / "figures"
-        figures_dir.mkdir(parents=True, exist_ok=True)
-
-        figure_number = self._get_figure_number(section_number)
-        image_filename = f"figure-{figure_number}.jpg"
-        image_path = figures_dir / image_filename
-
-        try:
-            with open(image_path, "wb") as f:
-                f.write(image_content)
-            print(f"✓ Saved image: {image_path}")
-            return str(image_path.relative_to("processed_outputs"))
-        except Exception as e:
-            print(f"Error saving image {image_path}: {e}")
-            return ""
-
-    def _build_section_hierarchy(self, parsed_doc) -> List[Dict]:
-        """Build section hierarchy from LlamaParse output"""
-        sections = []
-        section_map = {}  # Map to track parent-child relationships
-
-        def process_section(section_data, parent_id=None, level=0):
-            section_number = section_data.get("section_number", str(len(sections) + 1))
-            section = {
-                "id": f"section_{section_number}",
-                "number": section_number,
-                "title": section_data.get("heading", "Untitled Section"),
-                "content": section_data.get("content", ""),
-                "level": level,
-                "parent_id": parent_id,
-                "children": [],
-                "page_number": section_data.get("page_number", 1),
-            }
-            sections.append(section)
-            section_map[section["id"]] = section
-
-            # Process subsections
-            for subsection in section_data.get("subsections", []):
-                child_id = process_section(subsection, section["id"], level + 1)
-                section["children"].append(child_id)
-
-            return section["id"]
-
-        # Process root sections
-        for section in parsed_doc.get("sections", []):
-            process_section(section)
-
-        return sections
+    def _safe_summary(self, text: str) -> str:
+        """Guarantee that summary is always a string, never None."""
+        summary = self._generate_summary(text)
+        return summary if isinstance(summary, str) and summary else ""
 
     def process_report(self, pdf_path: str) -> Dict:
         """Process a single PDF report"""
         try:
-            print(f"\nProcessing {pdf_path}")
+            logger.info(f"Processing {pdf_path}")
 
-            # Extract content with unstructured first
-            print("1. Extracting content...")
+            # ---
+            # Multimodal Extraction Approach:
+            # 1. Use unstructured.partition.pdf (Unstructured) to extract all elements (text, images, tables, etc.) from the PDF.
+            # 2. Use llama_parse to analyze the document and build a hierarchy mapping (section paths, page structure).
+            # 3. For each element from Unstructured, assign hierarchy/context using the llama_parse mapping.
+            # This enables robust, context-aware chunking for RAG, with images/tables linked to their section.
+            # ---
+            logger.info("Extracting content with unstructured...")
             elements = partition_pdf(
-                filename=pdf_path,
-                extract_images_in_pdf=True,
-                infer_table_structure=True,
+                pdf_path,
                 strategy="hi_res",
-                extract_image_block_types=["Image"],
-                extract_image_block_to_payload=True,
-                include_metadata=True,
-                languages=["eng"],
+                extract_images_in_pdf=self.extract_images,
+                extract_image_block_types=["Image", "Table"],
                 pdf_image_dpi=150,
             )
 
-            # Initialize containers
+            logger.info("Getting document structure with llama_parse...")
+            parsed_doc = self.llama_parser.load_data(pdf_path)
+            logger.info(f"DEBUG: llama_parse output type={type(parsed_doc)}, repr={repr(parsed_doc)[:500]}")
+            # Build a mapping from page number to hierarchical path using llama_parse
+            page_hierarchy = {}
+            if isinstance(parsed_doc, list):
+                for doc_obj in parsed_doc:
+                    # Defensive: Some Document-like objects may not have metadata as a dict
+                    metadata = getattr(doc_obj, "metadata", {})
+                    # If metadata is not a dict, try to convert
+                    if not isinstance(metadata, dict) and hasattr(metadata, '__dict__'):
+                        metadata = dict(metadata.__dict__)
+                    page = metadata.get("page_number") or metadata.get("page")
+                    section_path = metadata.get("section_path") or metadata.get("path") or []
+                    if page is not None:
+                        page_hierarchy[page] = section_path
+            else:
+                logger.error(f"Unexpected type from llama_parse: {type(parsed_doc)}")
+
+            # Initialize container for all output chunks
             chunks = []
-            images = []
-            tables = []
-            sections = []
-            current_section = None
 
-            # First pass: identify sections from titles
+            # Process all elements
+            logger.info("Processing elements...")
+            doc_id = str(uuid.uuid4())  # One doc_id per processed document
+            prev_chunk_id = None
+            multimodal_chunks = []
+            image_counter = 0
+            output_dir = os.getenv('OUTPUT_DIR', 'processed_outputs')
+            # Remove creation of images_dir in processed_outputs unless actually needed
+            images_dir = os.path.join(output_dir, 'images')
+            # Only create images_dir if an image is actually saved there (see below)
+
             for element in elements:
                 if element is None:
                     continue
-
-                if isinstance(element, Title):
-                    try:
-                        title_text = str(element).strip() if element else ""
-                        if (
-                            title_text and len(title_text) < 200
-                        ):  # Reasonable title length
-                            current_section = {
-                                "id": f"section_{len(sections)}",
-                                "title": title_text,
-                                "content": "",
-                                "page_number": getattr(
-                                    element.metadata, "page_number", 1
-                                ),
-                            }
-                            sections.append(current_section)
-                    except Exception as e:
-                        print(f"Error processing title: {e}")
-                        continue
-
-            # Second pass: process all elements
-            for element in elements:
-                if element is None:
-                    continue
-
                 try:
                     element_type = type(element).__name__
+                    logger.debug(f"Element type: {element_type}, metadata: {getattr(element, 'metadata', None)}")
                     page_number = getattr(element.metadata, "page_number", 1)
+                    section_path = page_hierarchy.get(page_number, [])
+                    chunk_id = str(uuid.uuid4())
 
-                    try:
-                        element_text = str(element) if element else ""
-                    except Exception as e:
-                        print(f"Error converting element to string: {e}")
-                        element_text = ""
+                    # MULTIMODAL CHUNK LOGIC
+                    # ---
+                    # 1. If Image, always add as image chunk (if image_path or image_base64 exists)
+                    # 2. If Table or CompositeElement with HTML, always add as table chunk
+                    # 3. If Text, add as text chunk if it has meaningful content
+                    # ---
+                    # IMAGE CHUNKS
+                    if (hasattr(element, 'metadata') and (
+                        (isinstance(element, Image) and (getattr(element.metadata, 'image_path', None) or 'image_base64' in getattr(element.metadata, '__dict__', {})))
+                    )):
+                        try:
+                            os.makedirs(images_dir, exist_ok=True)
+                            image_counter += 1
+                            # Prefer image_path if present, else decode image_base64
+                            rel_image_path = None
+                            if getattr(element.metadata, 'image_path', None):
+                                abs_image_path = element.metadata.image_path
+                                rel_image_path = os.path.relpath(abs_image_path, start=os.getcwd())
+                            elif 'image_base64' in getattr(element.metadata, '__dict__', {}):
+                                image_b64 = element.metadata.image_base64
+                                img_data = base64.b64decode(image_b64)
+                                img_pil = PILImage.open(io.BytesIO(img_data))
+                                image_filename = f"{doc_id}_page_{page_number}_img_{image_counter}.png"
+                                abs_image_path = os.path.join(images_dir, image_filename)
+                                img_pil.save(abs_image_path)
+                                rel_image_path = os.path.relpath(abs_image_path, start=os.getcwd())
+                            # OCR extraction using pytesseract
+                            ocr_text = ""
+                            try:
+                                img_path = os.path.join(os.getcwd(), rel_image_path)
+                                img = PILImage.open(img_path)
+                                ocr_text = pytesseract.image_to_string(img)
+                            except Exception as e:
+                                logger.warning(f"OCR failed for image {rel_image_path}: {e}")
+                                ocr_text = ""
+                            # Clean metadata, remove _known_field_names if present
+                            metadata = make_json_serializable(element.metadata.__dict__) if hasattr(element.metadata, '__dict__') else {}
+                            if '_known_field_names' in metadata:
+                                metadata.pop('_known_field_names', None)
+                            # Build chunk dict and validate with Pydantic
+                            chunk_dict = {
+                                "chunk_id": str(uuid.uuid4()),
+                                "doc_id": doc_id,
+                                "modality": "image",
+                                "content": rel_image_path or "",
+                                "type": "image",
+                                "page_number": page_number,
+                                "section_path": section_path,
+                                "metadata": metadata,
+                                "ocr_text": ocr_text or "",
+                                "summary": self._safe_summary(ocr_text) if ocr_text else "",
+                                "prev_chunk": prev_chunk_id,
+                            }
+                            try:
+                                chunk = ChunkModel(**chunk_dict).model_dump()
+                            except ValidationError as ve:
+                                logger.error(f"Chunk validation error: {ve}")
+                                continue
+                            logger.info(f"Extracted image chunk: {chunk['chunk_id']} saved at {rel_image_path} (page {page_number}, section {section_path})")
+                            multimodal_chunks.append(chunk)
+                            prev_chunk_id = chunk["chunk_id"]
+                        except Exception as e:
+                            logger.error(f"Error saving image chunk: {e}")
+                            continue
 
-                    if isinstance(element, Text) and element_text:
-                        # Create a chunk for each text element
-                        chunk = {
-                            "content": element_text,
+                    # TABLE CHUNKS
+                    elif (isinstance(element, CompositeElement) and hasattr(element, 'metadata') and getattr(element.metadata, 'text_as_html', None)):
+                        html_table = getattr(element.metadata, 'text_as_html', None)
+                        if html_table:
+                            table_md = markdownify.markdownify(html_table, heading_style="ATX")
+                            table_chunk_id = str(uuid.uuid4())
+                            metadata = make_json_serializable(element.metadata.__dict__) if hasattr(element.metadata, '__dict__') else {}
+                            if '_known_field_names' in metadata:
+                                metadata.pop('_known_field_names', None)
+                            chunk_dict = {
+                                "chunk_id": table_chunk_id,
+                                "doc_id": doc_id,
+                                "modality": "table",
+                                "content": table_md.strip(),
+                                "type": "table",
+                                "page_number": page_number,
+                                "section_path": section_path,
+                                "metadata": metadata,
+                                "ocr_text": "",
+                                "summary": self._safe_summary(table_md),
+                                "prev_chunk": prev_chunk_id,
+                            }
+                            try:
+                                chunk = ChunkModel(**chunk_dict).model_dump()
+                            except ValidationError as ve:
+                                logger.error(f"Chunk validation error: {ve}")
+                                continue
+                            logger.info(f"Extracted table chunk: {chunk['chunk_id']} on page {page_number} in section {section_path}")
+                            multimodal_chunks.append(chunk)
+                            prev_chunk_id = table_chunk_id
+
+                    # TEXT CHUNKS
+                    elif isinstance(element, Text):
+                        try:
+                            element_text = str(element) if element else ""
+                        except Exception as e:
+                            logger.error(f"Error converting element to string: {e}")
+                            element_text = ""
+                        if not element_text or len(element_text.strip()) < 15 or not any(c.isalnum() for c in element_text):
+                            continue
+                        metadata = make_json_serializable(element.metadata.__dict__) if hasattr(element.metadata, '__dict__') else {}
+                        if '_known_field_names' in metadata:
+                            metadata.pop('_known_field_names', None)
+                        chunk_dict = {
+                            "chunk_id": chunk_id,
+                            "doc_id": doc_id,
+                            "modality": "text",
+                            "content": element_text.strip(),
                             "type": "text",
                             "page_number": page_number,
-                            "section_path": [
-                                s["title"]
-                                for s in sections
-                                if s["page_number"] <= page_number
-                            ],
-                            "metadata": {
-                                "element_type": element_type,
-                                "coordinates": getattr(
-                                    element.metadata, "coordinates", None
-                                ),
-                            },
+                            "section_path": section_path,
+                            "metadata": metadata,
+                            "ocr_text": "",
+                            "summary": self._safe_summary(element_text),
+                            "prev_chunk": prev_chunk_id,
                         }
+                        try:
+                            chunk = ChunkModel(**chunk_dict).model_dump()
+                        except ValidationError as ve:
+                            logger.error(f"Chunk validation error: {ve}")
+                            continue
+                        multimodal_chunks.append(chunk)
+                        prev_chunk_id = chunk_id
 
-                        # Only generate summary for non-empty content
-                        if len(element_text.strip()) > 0:
-                            chunk["summary"] = self._generate_summary(element_text)
-                        else:
-                            chunk["summary"] = ""
+                    # FALLBACK: If element is not recognized, log and skip
+                    else:
+                        logger.warning(f"Skipping unrecognized element type: {element_type} on page {page_number}")
+                        continue
 
-                        chunks.append(chunk)
-
-                    elif isinstance(element, Image) and self.extract_images:
-                        # Handle images
-                        image_data = {
-                            "type": "image",
-                            "page_number": page_number,
-                            "section_path": [
-                                s["title"]
-                                for s in sections
-                                if s["page_number"] <= page_number
-                            ],
-                            "metadata": {
-                                "element_type": element_type,
-                                "coordinates": getattr(
-                                    element.metadata, "coordinates", None
-                                ),
-                            },
-                        }
-                        images.append(image_data)
-
-                    elif (
-                        isinstance(element, CompositeElement)
-                        and element_text
-                        and "table" in element_text.lower()
-                    ):
-                        # Handle tables
-                        table_data = {
-                            "content": element_text,
-                            "type": "table",
-                            "page_number": page_number,
-                            "section_path": [
-                                s["title"]
-                                for s in sections
-                                if s["page_number"] <= page_number
-                            ],
-                            "metadata": {
-                                "element_type": element_type,
-                                "coordinates": getattr(
-                                    element.metadata, "coordinates", None
-                                ),
-                            },
-                        }
-                        tables.append(table_data)
                 except Exception as e:
-                    print(f"Error processing element: {e}")
+                    logger.error(f"Error processing multimodal element: {e}")
                     continue
 
-            # Add relationships between chunks
-            for i, chunk in enumerate(chunks):
-                if i > 0:
-                    chunk["prev_chunk"] = (
-                        chunks[i - 1]["content"][:100]
-                        if chunks[i - 1]["content"]
-                        else ""
-                    )
-                if i < len(chunks) - 1:
-                    chunk["next_chunk"] = (
-                        chunks[i + 1]["content"][:100]
-                        if chunks[i + 1]["content"]
-                        else ""
-                    )
+            # Set prev_chunk and next_chunk using chunk IDs only (robust for navigation)
+            for idx, chunk in enumerate(multimodal_chunks):
+                chunk["prev_chunk"] = multimodal_chunks[idx-1]["chunk_id"] if idx > 0 else None
+                chunk["next_chunk"] = multimodal_chunks[idx+1]["chunk_id"] if idx < len(multimodal_chunks) - 1 else None
 
+            chunks.extend(multimodal_chunks)
+
+            logger.info(
+                f"Processed document: {len(chunks)} multimodal chunks."
+            )
             return {
                 "chunks": chunks,
-                "images": images,
-                "tables": tables,
-                "sections": sections,
                 "document_metadata": {
                     "filename": os.path.basename(pdf_path),
                     "path": pdf_path,
                     "total_chunks": len(chunks),
-                    "total_images": len(images),
-                    "total_tables": len(tables),
-                    "total_sections": len(sections),
                 },
             }
 
         except Exception as e:
-            print(f"Error processing document: {e}")
+            logger.error(f"Error processing document: {e}")
             raise

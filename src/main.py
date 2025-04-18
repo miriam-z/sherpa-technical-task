@@ -1,4 +1,7 @@
+import asyncio
+import sys
 import os
+import logging
 import logging
 from pathlib import Path
 from typing import Dict, List
@@ -6,13 +9,17 @@ from store_vectors import process_directory
 from utils.weaviate_setup import setup_weaviate_client
 
 # Configure logging
+import asyncio
+if hasattr(asyncio, 'WindowsSelectorEventLoopPolicy'):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
 def process_all_tenants(
-    input_dir: str = "test_data", output_dir: str = "processed_outputs"
+    input_dir: str = "test_data", output_dir: str = "processed_outputs", parse_only: bool = False
 ) -> Dict[str, Dict[str, int]]:
     """
     Process all PDF files for all tenants in the input directory.
@@ -35,7 +42,7 @@ def process_all_tenants(
         tenant_id = tenant_dir.name.lower()
         logging.info(f"Processing tenant: {tenant_id} (directory: {tenant_dir.name})")
         try:
-            tenant_stats = process_directory(input_dir, tenant_id, output_dir)
+            tenant_stats = process_directory(input_dir, tenant_id, output_dir, parse_only=parse_only)
             stats[tenant_id] = tenant_stats
             logging.info(
                 f"Completed processing for tenant {tenant_id}. Stats: {tenant_stats}"
@@ -60,7 +67,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--input-dir",
-        default="test_data",
+        default="mbb_ai_reports",
         help="Directory containing tenant subdirectories with PDFs (default: test_data)",
     )
     parser.add_argument(
@@ -69,11 +76,14 @@ if __name__ == "__main__":
         help="Directory for processed outputs (default: processed_outputs)",
     )
 
+    parser.add_argument(
+        "--parse-only", action="store_true", help="Only parse and write results.json, do not vectorize or upload to Weaviate"
+    )
     args = parser.parse_args()
 
     try:
-        logging.info(f"Starting processing with input_dir={args.input_dir}")
-        all_stats = process_all_tenants(args.input_dir, args.output_dir)
+        logging.info(f"Starting processing with input_dir={args.input_dir}, parse_only={args.parse_only}")
+        all_stats = process_all_tenants(args.input_dir, args.output_dir, parse_only=args.parse_only)
         logging.info("Processing complete. Stats by tenant:")
         for tenant_id, stats in all_stats.items():
             logging.info(f"{tenant_id}: {stats}")

@@ -101,7 +101,7 @@ After completing the project setup above:
 python src/main.py
 
 # Start the FastAPI backend (in a new terminal)
-uvicorn src.api.main:app --reload --port 8000
+PYTHONPATH=src uvicorn src.api.main:app --reload --port 8000
 ```
 
 2. Launch the Streamlit UI (in a new terminal):
