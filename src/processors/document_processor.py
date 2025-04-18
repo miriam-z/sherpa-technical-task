@@ -110,6 +110,11 @@ class ConsultingReportProcessor:
         """Generate a summary for a single text"""
         return self._process_text_batch([text])[0] if text else None
 
+    def _safe_summary(self, text: str) -> str:
+        """Guarantee that summary is always a string, never None."""
+        summary = self._generate_summary(text)
+        return summary if isinstance(summary, str) and summary else ""
+
     def process_report(self, pdf_path: str) -> Dict:
         """Process a single PDF report"""
         try:
@@ -138,7 +143,11 @@ class ConsultingReportProcessor:
             page_hierarchy = {}
             if isinstance(parsed_doc, list):
                 for doc_obj in parsed_doc:
+                    # Defensive: Some Document-like objects may not have metadata as a dict
                     metadata = getattr(doc_obj, "metadata", {})
+                    # If metadata is not a dict, try to convert
+                    if not isinstance(metadata, dict) and hasattr(metadata, '__dict__'):
+                        metadata = dict(metadata.__dict__)
                     page = metadata.get("page_number") or metadata.get("page")
                     section_path = metadata.get("section_path") or metadata.get("path") or []
                     if page is not None:
@@ -220,7 +229,7 @@ class ConsultingReportProcessor:
                                 "section_path": section_path,
                                 "metadata": metadata,
                                 "ocr_text": ocr_text or "",
-                                "summary": self._generate_summary(ocr_text) if ocr_text else "",
+                                "summary": self._safe_summary(ocr_text) if ocr_text else "",
                                 "prev_chunk": prev_chunk_id,
                             }
                             try:
@@ -254,7 +263,7 @@ class ConsultingReportProcessor:
                                 "section_path": section_path,
                                 "metadata": metadata,
                                 "ocr_text": "",
-                                "summary": self._generate_summary(table_md) or "",
+                                "summary": self._safe_summary(table_md),
                                 "prev_chunk": prev_chunk_id,
                             }
                             try:
@@ -288,7 +297,7 @@ class ConsultingReportProcessor:
                             "section_path": section_path,
                             "metadata": metadata,
                             "ocr_text": "",
-                            "summary": self._generate_summary(element_text) or "",
+                            "summary": self._safe_summary(element_text),
                             "prev_chunk": prev_chunk_id,
                         }
                         try:
