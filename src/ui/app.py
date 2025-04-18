@@ -4,7 +4,11 @@ import json
 
 # Constants
 API_URL = "http://127.0.0.1:8000"
-TENANTS = ["bain", "bcg", "mck"]
+try:
+    from utils.rbac_config import TENANTS as TENANT_CONFIG
+    TENANTS = list(TENANT_CONFIG.keys())
+except ImportError:
+    TENANTS = ["bain", "bcg", "mck"]
 
 st.set_page_config(page_title="Consulting Reports Q&A", page_icon="📚", layout="wide")
 
@@ -13,12 +17,16 @@ st.title("Consulting Reports Q&A")
 # Sidebar for configuration
 with st.sidebar:
     st.header("Settings")
-    tenant_id = st.selectbox(
-        "Select Tenant",
-        options=TENANTS,
-        index=0,
-        help="Choose which tenant's documents to query",
-    )
+    if TENANTS:
+        tenant_id = st.selectbox(
+            "Select Tenant",
+            options=TENANTS,
+            index=0,
+            help="Choose which tenant's documents to query",
+        )
+    else:
+        st.error("No tenants available. Please check your configuration.")
+        tenant_id = None
 
     max_results = st.slider(
         "Number of chunks to retrieve",
