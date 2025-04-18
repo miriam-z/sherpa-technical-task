@@ -9,6 +9,13 @@ fi
 # Activate venv
 source .venv/bin/activate
 
+# Source .env file if present
+if [ -f .env ]; then
+  set -a
+  source .env
+  set +a
+fi
+
 # Install dependencies with uv
 uv sync
 
