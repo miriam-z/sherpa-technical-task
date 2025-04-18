@@ -36,11 +36,10 @@ This solution implements a basic RAG (Retrieval Augmented Generation) system for
 ### Project Setup
 1. Clone the repository
 
-2. Install uv package manager:
+1. **Install uv** 
    ```bash
    # macOS/Linux
    curl -LsSf https://astral.sh/uv/install.sh | sh
-
    # Windows (PowerShell)
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
@@ -51,7 +50,7 @@ This solution implements a basic RAG (Retrieval Augmented Generation) system for
    ```
 
 4. Create and activate virtual environment:
-   ```bash
+     ```bash
    # Create virtual environment with Python 3.12
    uv venv --python 3.12
 
@@ -66,7 +65,18 @@ This solution implements a basic RAG (Retrieval Augmented Generation) system for
    uv sync
    ```
 
-6. Set up environment variables in `.env` file:
+6. Run the application:
+   ```bash
+   chmod +x entrypoint.sh
+   ./entrypoint.sh
+   ```
+   - This will start both the FastAPI backend (http://localhost:8000) and Streamlit UI (http://localhost:8501).
+   - To run the document processing pipeline on startup, set the environment variable:
+     ```bash
+     RUN_PIPELINE_ON_START=true ./entrypoint.sh
+     ```
+
+7. Set up environment variables in `.env` file:
    ```bash
    # Weaviate configuration
    WEAVIATE_URL=your-weaviate-url
@@ -92,7 +102,51 @@ This solution implements a basic RAG (Retrieval Augmented Generation) system for
 Note: uv is a fast, reliable Python package installer and resolver. For more information, visit [uv documentation](https://docs.astral.sh/uv/getting-started/installation/#uv).
 
 ### Quick Start
-After completing the project setup above:
+
+After completing the setup above:
+1. Ensure your `.env` file is configured with the required API keys and endpoints.
+2. Start the application:
+   ```bash
+   ./entrypoint.sh
+   ```
+   - FastAPI backend: http://localhost:8000
+   - Streamlit UI: http://localhost:8501
+
+3. (Optional) Run the document pipeline on startup:
+   ```bash
+   RUN_PIPELINE_ON_START=true ./entrypoint.sh
+   ```
+
+---
+
+### Scripts & Performance Profiling
+
+- **entrypoint.sh**: Main script to set up environment and launch all services.
+- **store_vectors.py**: Script to process and store documents in Weaviate.
+- **Scalene**: Installed for performance profiling. To profile any script, run:
+  ```bash
+  scalene src/your_script.py
+  ```
+  Replace `src/your_script.py` with the script you want to profile (e.g., `src/store_vectors.py`).
+
+---
+
+### Document Parsing: llama-parse & unstructured
+
+- **llama-parse**: Used for extracting structured data (text, hierarchy, metadata) from PDFs and complex documents. It returns a list of Document objects, each with attributes like `text` and `metadata`. The pipeline iterates over these objects to extract content and hierarchy information.
+- **unstructured**: Used as a fallback or for additional parsing (e.g., extracting tables, images, or diagrams not handled by llama-parse). It helps ensure all valuable data is extracted, even from non-linear or diagram-heavy slides.
+- The codebase is designed to handle both tools seamlessly, maintaining document structure and hierarchy for downstream processing.
+
+---
+
+### Additional Notes
+- **Security**: Do not commit any API keys or secrets. Use the `.env` file for all sensitive configuration.
+- **Scalability**: The app is designed for easy extension and scaling. For high-volume or production use, consider deploying with a process manager or container orchestration.
+- **Testing & Validation**: Output validation and prompt testing are included to minimize hallucinations and ensure robust model responses.
+
+---
+
+For issues or contributions, please open an issue or pull request.
 
 1. Start the backend services:
 ```bash
@@ -115,17 +169,7 @@ The application will be available at:
 - Streamlit UI: http://localhost:8501
 
 ### Test Data
-The repository includes a `test_data` directory with a few sample PDFs from major consulting firms (Bain, BCG, McKinsey) for demonstration purposes. These have been pre-vectorized for quick testing and evaluation.
-
-To test with full MBB AI Reports:
-1. Create directories in `test_data` for each tenant: `Bain/`, `BCG/`, `McK/`
-2. Add PDF reports to respective directories
-3. Run the processing script:
-```bash
-python src/main.py
-```
-
-Note: Processing large volumes of documents may require optimization for production use.
+The repository includes a `test_data` directory with sample PDFs from each tenant for quick testing and evaluation. The pipeline will automatically process all PDFs found in `mbb_ai_reports` —no manual setup is required.
 
 ### Multi-tenant Support
 - The system supports multiple tenants (Bain, BCG, McKinsey) with strict data isolation
@@ -134,66 +178,48 @@ Note: Processing large volumes of documents may require optimization for product
 - Current implementation focuses on demonstrating multi-tenant querying capabilities
 
 ### Current Limitations and Future Enhancements
-1. **Performance Optimization**
-   - Batch processing for large document sets
-   - Caching for frequently accessed chunks
-   - Query optimization for faster response times
 
-2. **Security**
-   - Authentication system for tenant access
-   - Role-based access control
-   - API key management
-   - Audit logging
+- **Performance Optimization** (Planned)
+  - Batch processing for very large document sets
+  - Improved caching for frequently accessed content
+  - Further query optimization for low-latency responses
 
-3. **Known Issues**
-   - ⚠️ Section IDs are currently identical across different documents
-   - This affects document hierarchy and relationship tracking
-   - Fix planned: Implement unique section ID generation using document identifiers
+- **Security** (Planned)
+  - Full authentication system for tenant access (current: multi-tenant isolation, RBAC, API key validation)
+  - Enhanced audit logging and request tracing
 
-4. **Scalability**
-   - Connection pooling for concurrent requests
-   - Load balancing for distributed processing
-   - Query result caching
+- **Known Issues**
+  - ⚠️ Section IDs are currently identical across different documents, which may affect document relationship tracking
+  - Planned: Generate unique section IDs using document identifiers for robust hierarchy
+
+- **Scalability**
+  - System is designed for multi-tenant scaling and can be extended with connection pooling and distributed processing
+  - Query result caching and horizontal scaling are planned for production deployments
 
 ### Directory Structure
 ```
 src/
-├── processors/      # Document processing logic
-├── utils/          # Shared utilities
-│   ├── weaviate_setup.py
-│   ├── auth.py
-│   └── validation.py
-├── ui/             # Streamlit interface
-└── main.py         # Main processing script
+├── processors/         # Document processing logic
+├── utils/              # Shared utilities (weaviate_setup.py, auth.py, validation.py)
+├── ui/                 # Streamlit interface
+├── store_vectors.py    # Script to process and store documents
+└── main.py             # Main processing script
 ```
 
 ### Challenges & Solutions
 
-#### 1. Multi-tenant Data Isolation
-**Challenge**: Ensuring strict data separation between consulting firms.
-**Solution**: Implemented Weaviate's multi-tenancy with proper RBAC configuration.
+#### Multi-tenant Data Isolation
+- **Implemented**: Weaviate multi-tenancy with RBAC to ensure strict data separation between consulting firms.
 
-#### 2. Document Processing
-**Challenge**: 
-- Handling complex consulting reports with non-linear structure
-- ⚠️ Section IDs currently duplicate across different documents, affecting document relationships
+#### Document Processing
+- **Enhanced parsing** for complex, non-linear consulting reports using llama-parse and unstructured.
+- **Preserved document hierarchy** and improved error handling for malformed PDFs.
+- **Image extraction** with coordinate mapping for diagrams and charts.
+- **Planned**: Unique section IDs (incorporating document identifiers) and improved relationship tracking.
 
-**Solution**: 
-- Enhanced document processor to handle None elements
-- Added robust error handling for malformed PDFs
-- Preserved document hierarchy and relationships
-- Implemented image extraction with coordinate mapping
-- Prepared for CLIP-based visual semantic search
-- Built foundation for cross-modal retrieval (text-to-image, image-to-text)
+#### Vector Storage
+- **Improved persistence**: Weaviate collections now support incremental, tenant-specific additions without overwriting existing vectors.
 
-**Planned Improvements**:
-- Generate unique section IDs by incorporating document identifiers
-- Update relationship tracking to maintain document hierarchy
-- Ensure backwards compatibility with existing stored documents
-
-#### 3. Vector Storage Persistence
-**Challenge**: Initial implementation overwrote vectors when processing multiple tenants.
-**Solution**: Modified Weaviate setup to preserve existing collections and add tenant-specific data incrementally.
 
 #### 4. Response Quality
 **Challenge**: Ensuring high-quality responses without hallucinations.
@@ -233,11 +259,11 @@ You've been provided with a set of reports, articles and presentations on the to
 #### Nice-to-Haves
 1. **Complex Data Parsing**
     1. Are you able to utilise all of the data contained in the reports (i.e. including the tables, charts and images which contain valuable information)? ⚠️ (Partially Implemented)
-        - ✅ Extracted images with precise coordinates from PDFs
-        - ✅ Stored image metadata including position, size, and context
-        - ⏳ CLIP model integration for image vectorization and semantic search
-        - ⏳ Image-text cross-modal retrieval for relevant visuals during queries
-        - ⏳ Table extraction and structured data parsing
+     - ✅ Extracted images with precise coordinates from PDFs
+     - ✅ Stored image metadata including position, size, and context
+     - ⏳ CLIP model integration for image vectorization and semantic search
+     - ⏳ Image-text cross-modal retrieval for relevant visuals during queries
+     - ⏳ Table extraction and structured data parsing
     2. Typical consulting powerpoint decks contain content which does not follow a linear, logical flow like a Word document. Diagrams such as flow-charts use structure to add hierarchy to text. ✅ (Implemented hierarchical document processing with section paths)
 2. **Authentication / RBAC** ✅
     1. You may want to consider simulating user authentication, data siloes or user permissioning / access rights. ✅ (Implemented RBAC with user roles)
@@ -259,23 +285,23 @@ Legend:
 - ⏳ Work in Progress/Planned
 
 ### Scalability Implementation ⚠️
-1. **Distributed Processing with Ray**
-   - Implemented Ray for parallel document processing across multiple cores
-   - Ray's actor model enables efficient distribution of document chunks
-   - Significantly reduces processing time for large document batches
-   - Handles memory management for large PDF processing tasks
 
-2. **Infrastructure**
-   - ✅ Implemented batch processing and tenant isolation
-   - ⏳ Connection pooling and caching planned
-   - ⏳ Load balancing for distributed query handling
+- **Parallel & Batch Processing:**
+  - Ray is used for parallel document processing, distributing work across available CPU cores.
+  - Batch processing is implemented for efficient handling of large document sets and tenants.
+  - This approach significantly reduces processing time for bulk PDF ingestion and vectorization.
 
-Ray was chosen for its:
-- Native Python integration
+- **Infrastructure:**
+  - ✅ Tenant isolation and batch processing are implemented.
+  - ⏳ Planned: Connection pooling, advanced caching, and load balancing for distributed query handling.
+
+**Why Ray?**
+- Native Python integration and simple API
 - Efficient memory management for large documents
 - Built-in fault tolerance
-- Scalable from single machine to cluster deployment
-- Simple API that works with existing Python code
+- Scalable from laptop to cluster
+
+*Note: Ray is currently used for local and single-node parallelism. Cluster deployment and advanced distributed features are planned for future releases.*
 
 ---
 ### Author
