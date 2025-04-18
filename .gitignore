@@ -175,3 +175,7 @@ processed_outputs
 test_data
 figures
 .DS_Store
+
+# Scalene profiler outputs
+profile.html
+profile.json
