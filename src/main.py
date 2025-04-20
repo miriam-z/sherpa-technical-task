@@ -5,7 +5,7 @@ import logging
 import logging
 from pathlib import Path
 from typing import Dict, List
-from store_vectors import process_directory
+from store_vectors import process_directory, process_all_tenants
 from utils.weaviate_setup import setup_weaviate_client
 
 # Configure logging
@@ -18,46 +18,8 @@ logging.basicConfig(
 )
 
 
-def process_all_tenants(
-    input_dir: str = "test_data", output_dir: str = "processed_outputs", parse_only: bool = False
-) -> Dict[str, Dict[str, int]]:
-    """
-    Process all PDF files for all tenants in the input directory.
-    Each tenant should have their own subdirectory.
-    """
-    stats = {}
-    input_path = Path(input_dir)
-
-    if not input_path.exists():
-        raise ValueError(f"Input directory {input_dir} does not exist")
-
-    # Get all tenant directories
-    tenant_dirs = [d for d in input_path.iterdir() if d.is_dir()]
-
-    if not tenant_dirs:
-        logging.warning(f"No tenant directories found in {input_dir}")
-        return stats
-
-    for tenant_dir in tenant_dirs:
-        tenant_id = tenant_dir.name.lower()
-        logging.info(f"Processing tenant: {tenant_id} (directory: {tenant_dir.name})")
-        try:
-            tenant_stats = process_directory(input_dir, tenant_id, output_dir, parse_only=parse_only)
-            stats[tenant_id] = tenant_stats
-            logging.info(
-                f"Completed processing for tenant {tenant_id}. Stats: {tenant_stats}"
-            )
-        except Exception as e:
-            logging.error(f"Failed to process tenant {tenant_id}: {str(e)}")
-            stats[tenant_id] = {
-                "processed": 0,
-                "failed": 1,
-                "chunks_stored": 0,
-                "chunks_failed": 0,
-            }
-
-    return stats
-
+# The process_all_tenants function now lives in store_vectors.py to centralize processing logic for CLI usage.
+# from store_vectors import process_all_tenants
 
 if __name__ == "__main__":
     import argparse

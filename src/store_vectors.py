@@ -167,6 +167,44 @@ def process_document_remote(pdf_file, tenant_id, output_dir, username, parse_onl
     return process_and_store_document(pdf_file, tenant_id, output_dir, username, parse_only)
 
 
+def process_all_tenants(
+    input_dir: str,
+    output_dir: str = "processed_outputs",
+    username: str = None,
+    parse_only: bool = False,
+) -> Dict[str, int]:
+    """Process all PDF files in a directory using Ray for parallel processing"""
+    stats = {"processed": 0, "failed": 0, "chunks_stored": 0, "chunks_failed": 0}
+
+    input_path = Path(input_dir)
+    if not input_path.exists():
+        raise ValueError(f"Input directory {input_dir} does not exist")
+
+    # Initialize Ray
+    ray.init(ignore_reinit_error=True)
+
+    # List of Ray tasks
+    tasks = []
+    for tenant_dir in input_path.iterdir():
+        if tenant_dir.is_dir():
+            for pdf_file in tenant_dir.glob("*.pdf"):
+                tasks.append(
+                    process_document_remote.remote(
+                        str(pdf_file), tenant_dir.name, output_dir, username, parse_only
+                    )
+                )
+
+    # Collect results
+    results = ray.get(tasks)
+
+    for successful, failed in results:
+        stats["processed"] += 1
+        stats["chunks_stored"] += successful
+        stats["chunks_failed"] += failed
+
+    return stats
+
+
 def process_directory(
     input_dir: str,
     tenant_id: str,
@@ -324,8 +362,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--tenant-id",
-        default="sherpa",
-        help="Tenant ID for the documents (default: sherpa)",
+        default=None,
+        help="Tenant ID for the documents. If not set and --parse-only is used, all tenants will be processed.",
     )
     parser.add_argument(
         "--output-dir",
@@ -345,13 +383,20 @@ if __name__ == "__main__":
         logging.info(
             f"Starting processing with input_dir={args.input_dir}, tenant_id={args.tenant_id}, parse_only={args.parse_only}"
         )
-        stats = process_directory(
-            args.input_dir, args.tenant_id, args.output_dir, args.username, parse_only=args.parse_only
-        )
+        if args.tenant_id is None and args.parse_only:
+            logging.info("No tenant_id provided and parse_only mode set. Processing all tenants.")
+            stats = process_all_tenants(
+                input_dir=args.input_dir,
+                output_dir=args.output_dir,
+                parse_only=True
+            )
+        else:
+            stats = process_directory(
+                args.input_dir, args.tenant_id, args.output_dir, args.username, parse_only=args.parse_only
+            )
         logging.info(f"Processing complete. Stats: {stats}")
     except Exception as e:
         logging.error(f"Processing failed: {str(e)}")
         exit(1)
 
-    # Example usage for stress testing
-    stress_test("MBB AI reports", "sherpa", "processed_outputs", None, False)
+    
