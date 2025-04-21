@@ -72,9 +72,13 @@ class RAGService:
             context = [obj.properties["content"] for obj in objects]
             context_str = "\n".join(context)
 
-            # Generate answer using LLM
+            # TruLens Integration
+            from src.utils.utils import get_trulens_recorder
             chain = self.qa_prompt | self.llm
-            answer = await chain.ainvoke({"context": context_str, "question": query})
+            tru_recorder = get_trulens_recorder(chain, app_id="consulting_rag_app")
+            with tru_recorder as recording:
+                answer = await chain.ainvoke({"context": context_str, "question": query})
+            feedback_results = recording.get_feedback_results() if hasattr(recording, "get_feedback_results") else {}
 
             return {
                 "answer": answer.content,
@@ -87,6 +91,7 @@ class RAGService:
                     for obj in objects
                 ],
                 "context": context,
+                "trulens_feedback": feedback_results,
             }
 
         except Exception as e:

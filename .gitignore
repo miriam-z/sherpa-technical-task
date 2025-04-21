@@ -179,3 +179,4 @@ figures
 # Scalene profiler outputs
 profile.html
 profile.json
+default.sqlite
