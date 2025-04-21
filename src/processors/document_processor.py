@@ -1,3 +1,5 @@
+from llama_index.core.node_parser import HierarchicalNodeParser
+from llama_index.core.schema import Document as LlamaDocument
 import os
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -9,13 +11,20 @@ from langchain_core.output_parsers import StrOutputParser
 from llama_parse import LlamaParse
 import logging
 import uuid
-import os
 from PIL import Image as PILImage
 import io
 import markdownify
 import pytesseract
 from pydantic import BaseModel, Field, ValidationError
 from typing import Any
+import json
+
+def parse_text_with_hierarchy(text: str):
+    parser = HierarchicalNodeParser.from_defaults(
+        chunk_sizes=[512, 128]
+    )
+    parent_nodes, child_nodes = parser.get_nodes_from_documents([LlamaDocument(text=text)])
+    return parent_nodes, child_nodes
 
 
 class ChunkModel(BaseModel):
@@ -38,7 +47,6 @@ def make_json_serializable(obj):
     Recursively convert objects to JSON-serializable types.
     Converts frozenset/set to list, objects with __dict__ to dict, and all non-serializable types to string.
     """
-    import json
     if isinstance(obj, dict):
         return {k: make_json_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -133,7 +141,7 @@ class ConsultingReportProcessor:
                 strategy="hi_res",
                 extract_images_in_pdf=self.extract_images,
                 extract_image_block_types=["Image", "Table"],
-                pdf_image_dpi=150,
+                pdf_image_dpi=300,
             )
 
             logger.info("Getting document structure with llama_parse...")
@@ -287,26 +295,45 @@ class ConsultingReportProcessor:
                         metadata = make_json_serializable(element.metadata.__dict__) if hasattr(element.metadata, '__dict__') else {}
                         if '_known_field_names' in metadata:
                             metadata.pop('_known_field_names', None)
-                        chunk_dict = {
-                            "chunk_id": chunk_id,
-                            "doc_id": doc_id,
-                            "modality": "text",
-                            "content": element_text.strip(),
-                            "type": "text",
-                            "page_number": page_number,
-                            "section_path": section_path,
-                            "metadata": metadata,
-                            "ocr_text": "",
-                            "summary": self._safe_summary(element_text),
-                            "prev_chunk": prev_chunk_id,
-                        }
-                        try:
-                            chunk = ChunkModel(**chunk_dict).model_dump()
-                        except ValidationError as ve:
-                            logger.error(f"Chunk validation error: {ve}")
-                            continue
-                        multimodal_chunks.append(chunk)
-                        prev_chunk_id = chunk_id
+                        # Use HierarchicalNodeParser for improved hierarchical chunking
+                        parent_nodes, child_nodes = parse_text_with_hierarchy(element_text.strip())
+                        for node in child_nodes:
+                            text = None
+                            # Only process ('text', <actual_text>) tuples
+                            if isinstance(node, tuple):
+                                if len(node) == 2 and node[0] == "text" and isinstance(node[1], str):
+                                    text = node[1]
+                                    logger.info(f"Processing text chunk: {text[:50]}...")
+                                else:
+                                    logger.debug(f"Skipping non-text or malformed tuple node: {node}")
+                                    continue
+                            else:
+                                text = getattr(node, "text", None)
+                                logger.debug(f"Processing node object: {getattr(node, 'text', '')[:50]}...")
+                            if text is None:
+                                logger.error(f"Could not extract text from node: {node}")
+                                continue
+                            chunk_id = str(uuid.uuid4())
+                            chunk_dict = {
+                                "chunk_id": chunk_id,
+                                "doc_id": doc_id,
+                                "modality": "text",
+                                "content": text,
+                                "type": "text",
+                                "page_number": page_number,
+                                "section_path": section_path,
+                                "metadata": metadata,
+                                "ocr_text": "",
+                                "summary": self._safe_summary(text),
+                                "prev_chunk": prev_chunk_id,
+                            }
+                            try:
+                                chunk = ChunkModel(**chunk_dict).model_dump()
+                            except ValidationError as ve:
+                                logger.error(f"Chunk validation error: {ve}")
+                                continue
+                            multimodal_chunks.append(chunk)
+                            prev_chunk_id = chunk_id
 
                     # FALLBACK: If element is not recognized, log and skip
                     else:
