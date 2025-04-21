@@ -15,7 +15,6 @@ import uuid
 from datetime import datetime
 import logging
 from pydantic import field_validator
-import time
 
 # Load environment variables
 load_dotenv()
@@ -81,6 +80,8 @@ def process_and_store_document(
     username: str = None,
     parse_only: bool = False,
 ) -> tuple:
+    # Normalize tenant_id to lowercase for consistency
+    tenant_id = tenant_id.lower()
     """Process a document and store its chunks in Weaviate"""
     try:
         # Initialize processor (and Weaviate client only if not parse_only)
@@ -334,19 +335,6 @@ def batch_store_chunks(client: weaviate.Client, chunks: list) -> tuple:
     except Exception as e:
         logging.error(f"Error in batch operation: {str(e)}")
         return successful, failed
-
-
-def stress_test(input_dir, tenant_id, output_dir, username, parse_only):
-    start_time = time.time()
-
-    # Process with Ray
-    stats = process_directory(input_dir, tenant_id, output_dir, username, parse_only)
-
-    end_time = time.time()
-    processing_time = end_time - start_time
-
-    logging.info(f"Processing time: {processing_time} seconds")
-    logging.info(f"Stats: {stats}")
 
 
 if __name__ == "__main__":
