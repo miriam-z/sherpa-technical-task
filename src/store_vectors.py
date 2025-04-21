@@ -181,9 +181,6 @@ def process_all_tenants(
     if not input_path.exists():
         raise ValueError(f"Input directory {input_dir} does not exist")
 
-    # Initialize Ray
-    ray.init(ignore_reinit_error=True)
-
     # List of Ray tasks
     tasks = []
     for tenant_dir in input_path.iterdir():
@@ -224,8 +221,8 @@ def process_directory(
     if not tenant_dir.exists():
         raise ValueError(f"Tenant directory {tenant_dir} does not exist")
 
-    # Initialize Ray
-    ray.init(ignore_reinit_error=True)
+
+
 
     # List of Ray tasks
     tasks = [
@@ -338,11 +335,12 @@ def batch_store_chunks(client: weaviate.Client, chunks: list) -> tuple:
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Process PDFs and store vectors in Weaviate"
-    )
+    
+    ray.init(ignore_reinit_error=True, num_cpus=6)
+    logging.info(f"Ray initialized with resources: {ray.available_resources()}")
+    
+    
+    parser = argparse.ArgumentParser(description="Process PDF documents and store vectors in Weaviate")
     parser.add_argument(
         "--input-dir",
         default="mbb_ai_reports",
