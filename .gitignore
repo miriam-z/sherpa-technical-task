@@ -174,9 +174,11 @@ cython_debug/
 processed_outputs
 test_data
 figures
+src/evaluation/eval_questions
 .DS_Store
 
 # Scalene profiler outputs
 profile.html
 profile.json
 default.sqlite
+
