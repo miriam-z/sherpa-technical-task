@@ -104,6 +104,23 @@ def run_for_all_tenants(n=10):
         else:
             logging.warning(f"No content found for tenant {tenant}, skipping question generation.")
 
+def generate_groundtruth_csvs():
+    import glob
+    import pandas as pd
+    eval_dir = os.path.join(os.path.dirname(__file__), "eval_questions")
+    txt_files = glob.glob(os.path.join(eval_dir, "eval_questions_*.txt"))
+    if not txt_files:
+        print(f"No eval_questions_*.txt files found in {eval_dir}.")
+        return
+    for txt_path in txt_files:
+        tenant = os.path.basename(txt_path).replace("eval_questions_", "").replace(".txt", "")
+        csv_path = os.path.join(eval_dir, f"groundtruth_{tenant}.csv")
+        with open(txt_path, "r") as f:
+            questions = [q.strip() for q in f.readlines() if q.strip()]
+        df = pd.DataFrame({"query": questions, "expected_response": ["" for _ in questions]})
+        df.to_csv(csv_path, index=False)
+        print(f"Generated {csv_path} with {len(df)} questions.")
+
 def main():
     import sys
     parser = argparse.ArgumentParser(description="Generate evaluation questions from parsed PDF text.")
@@ -112,7 +129,12 @@ def main():
     parser.add_argument("--output", type=str, help="Where to save the questions. If omitted, defaults to eval_questions_{tenant}.txt")
     parser.add_argument("--n", type=int, default=10, help="Number of questions to generate.")
     parser.add_argument("--all-tenants", action="store_true", help="Run for all tenants defined in TENANT_PARSED_PATHS.")
+    parser.add_argument("--generate-groundtruth-csvs", action="store_true", help="Generate groundtruth CSVs from eval_questions_*.txt files.")
     args = parser.parse_args()
+
+    if args.generate_groundtruth_csvs:
+        generate_groundtruth_csvs()
+        return
 
     if args.all_tenants:
         run_for_all_tenants(args.n)
