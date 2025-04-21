@@ -33,73 +33,102 @@ This solution implements a basic RAG (Retrieval Augmented Generation) system for
 - **Frontend**: Streamlit
 - **Analytics**: Custom query tracking with Plotly visualizations
 
-### Project Setup
+### Project Setup (Local Development)
 1. Clone the repository
-
-1. **Install uv** 
+2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/#uv) and Python 3.12 if not already installed:
    ```bash
-   # macOS/Linux
    curl -LsSf https://astral.sh/uv/install.sh | sh
-   # Windows (PowerShell)
-   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-   ```
-
-3. Verify installation:
-   ```bash
-   uv version
-   ```
-
-4. Create and activate virtual environment:
-     ```bash
-   # Create virtual environment with Python 3.12
    uv venv --python 3.12
-
-   # Activate virtual environment
-   source .venv/bin/activate  # macOS/Linux
-   .venv\Scripts\activate     # Windows
-   ```
-
-5. Install dependencies:
-   ```bash
-   # Sync dependencies from pyproject.toml
+   source .venv/bin/activate
    uv sync
    ```
+3. Set up your `.env` file in the project root with all required API keys and config (see example in this README).
 
-6. Run the application:
+---
+
+### Running the Application with Docker
+
+**1. Build the Docker image:**
+```bash
+docker build -t sherpa-app .
+```
+
+**2. Run the Docker container:**
+```bash
+docker run -p 8000:8000 -p 8501-8510:8501-8510 sherpa-app
+```
+- FastAPI backend will be available at: http://localhost:8000
+- Streamlit UI will be available at the port printed in the terminal (commonly http://localhost:8501)
+- The Streamlit port is dynamic; check the logs for the correct URL.
+
+**3. (Optional) Run the document processing pipeline on startup:**
+```bash
+docker run -e RUN_PIPELINE_ON_START=true -p 8000:8000 -p 8501-8510:8501-8510 sherpa-app
+```
+
+**To save output files (figures, processed_outputs) to your local machine:**
+```bash
+docker run -e RUN_PIPELINE_ON_START=true \
+  -v $(pwd)/figures:/app/figures \
+  -v $(pwd)/processed_outputs:/app/processed_outputs \
+  -p 8000:8000 -p 8501-8510:8501-8510 sherpa-app
+```
+This will write all pipeline outputs to `figures/` and `processed_outputs/` in your current directory.
+
+---
+
+### Running the TruLens Dashboard (outside Docker)
+
+The TruLens dashboard is **not** started by the Docker container. To run it locally:
+
+1. **Activate your virtual environment:**
    ```bash
-   chmod +x entrypoint.sh
-   ./entrypoint.sh
+   source .venv/bin/activate
    ```
-   - This will start both the FastAPI backend (http://localhost:8000) and Streamlit UI (http://localhost:8501).
-   - To run the document processing pipeline on startup, set the environment variable:
-     ```bash
-     RUN_PIPELINE_ON_START=true ./entrypoint.sh
-     ```
-
-7. Set up environment variables in `.env` file:
+2. **Install dependencies (if not already done):**
    ```bash
-   # Weaviate configuration
-   WEAVIATE_URL=your-weaviate-url
-   WEAVIATE_API_KEY=your-weaviate-api-key
-   
-   # Tenant-specific passwords
-   WEAVIATE_BAIN_ADMIN_PASSWORD=your-bain-password
-   WEAVIATE_BCG_ADMIN_PASSWORD=your-bcg-password
-   WEAVIATE_MCK_ADMIN_PASSWORD=your-mck-password
-   
-   # Azure OpenAI configuration
-   AZURE_OPENAI_API_KEY=your-azure-openai-key
-   ENDPOINT_URL=your-azure-openai-endpoint
-   EMBEDDINGS_DEPLOYMENT_NAME=text-embedding-3-small
-   DEPLOYMENT_NAME=your-deployment-name
-   
-   # Other API Keys
-   LLAMA_API_KEY=your-llama-api-key
+   uv sync
    ```
+3. **Run the dashboard:**
+   ```bash
+   python src/scripts/run_trulens_dashboard.py
+   ```
+4. **Check the terminal for the dashboard URL** (e.g., `http://localhost:55204`) and open it in your browser.
 
-   Note: Create a `.env` file in the project root and add these environment variables. Never commit the actual API keys to version control.
+---
 
-Note: uv is a fast, reliable Python package installer and resolver. For more information, visit [uv documentation](https://docs.astral.sh/uv/getting-started/installation/#uv).
+### Environment Variables Example
+Create a `.env` file in the project root:
+```env
+# Weaviate configuration
+WEAVIATE_URL=your-weaviate-url
+WEAVIATE_API_KEY=your-weaviate-api-key
+
+# Tenant-specific passwords
+WEAVIATE_BAIN_ADMIN_PASSWORD=your-bain-password
+WEAVIATE_BCG_ADMIN_PASSWORD=your-bcg-password
+WEAVIATE_MCK_ADMIN_PASSWORD=your-mck-password
+
+# Azure OpenAI configuration
+AZURE_OPENAI_API_KEY=your-azure-openai-key
+ENDPOINT_URL=your-azure-openai-endpoint
+EMBEDDINGS_DEPLOYMENT_NAME=text-embedding-3-small
+DEPLOYMENT_NAME=your-deployment-name
+
+# Other API Keys
+LLAMA_API_KEY=your-llama-api-key
+```
+*Never commit the actual API keys to version control.*
+
+---
+
+### Notes
+- The Docker image only starts the FastAPI backend and Streamlit UI.
+- The TruLens dashboard must be run separately on your host machine.
+- After starting the Docker container, always check the terminal for the correct Streamlit URL.
+- For development or debugging, you can still use `entrypoint.sh` directly (after `chmod +x entrypoint.sh`).
+
+---
 
 ### Quick Start
 
